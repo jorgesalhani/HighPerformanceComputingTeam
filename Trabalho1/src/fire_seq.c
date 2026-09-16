@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -98,37 +99,37 @@ typedef struct {
  * FOCOS_INCENDIO: focos de incêndio
  * ZONAS_CONTENCAO: zonas de contenção
  */
-struct input_configs {
+typedef struct {
   unsigned int L, C, P, T, SEED, LIMIAR;
   int VENTO_LINHA, VENTO_COLUNA, V;
   int F, Z;
   FocoIncendio** FOCOS_INCENDIO;
   ZonaContencao** ZONAS_CONTENCAO;
-};
+} InputConfigs;
 
 
 // Definições de funções
 // =====================
 
 
-struct input_configs* load_input_configs(const char* filepath);
-void free_input_configs(struct input_configs* configs);
+InputConfigs* load_input_configs(const char* filepath);
+void free_input_configs(InputConfigs* configs);
 
 // Impressão de configurações (debug)
-void print_loaded_input_configs(struct input_configs* configs);
+void print_loaded_input_configs(InputConfigs* configs);
 
-bool is_valid_input_configs(struct input_configs* configs);
+bool is_valid_input_configs(InputConfigs* configs);
 bool is_valid_single_input_argument(int argc);
 
-bool is_valid_configs_first_line(struct input_configs* configs);
-bool is_valid_configs_vento(struct input_configs* configs);
-bool is_valid_F_Z(struct input_configs* configs);
-bool is_valid_matrix_focos_incendio(struct input_configs* configs);
-bool is_valid_matrix_zonas_contencao(struct input_configs* configs);
-bool is_valid_foco_incendio_sobre_celula_combustivel(struct input_configs* configs, int id_cobertura, unsigned long long);
+bool is_valid_configs_first_line(InputConfigs* configs);
+bool is_valid_configs_vento(InputConfigs* configs);
+bool is_valid_F_Z(InputConfigs* configs);
+bool is_valid_matrix_focos_incendio(InputConfigs* configs);
+bool is_valid_matrix_zonas_contencao(InputConfigs* configs);
+bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, unsigned long long);
 
 // Geração de cobertura
-Celula *build_linear_state_matrix(struct input_configs* configs);
+Celula *build_linear_state_matrix(InputConfigs* configs);
 
 
 /**
@@ -136,7 +137,7 @@ Celula *build_linear_state_matrix(struct input_configs* configs);
  * 
  * 5.3: L > 0, C > 0, P ≥ 0, T > 0, LIMIAR > 0
  */
-bool is_valid_configs_first_line(struct input_configs* configs) {
+bool is_valid_configs_first_line(InputConfigs* configs) {
   // Validação 3: Argumentos de primeira linha
 
   // Validação 3.1: L > 0
@@ -188,18 +189,16 @@ bool is_valid_configs_first_line(struct input_configs* configs) {
  * Coordenadas de Focos: L, C
  * Coordenadas de Zonas: PASSO_ATIVACAO, LI, CI, LF, CF
  */
-struct input_configs* load_input_configs(const char* filepath) {
+InputConfigs* load_input_configs(const char* filepath) {
   // 4. Formato do arquivo de entrada
   FILE* file = fopen(filepath, "r");
 
-  // 5. Validação da entrada
-  // 5.2: Abertura de arquivo de entrada
   if (!file) {
     perror("Erro ao abrir arquivo\n");
     return NULL;
   }
 
-  struct input_configs* configs = (struct input_configs*) malloc(sizeof(struct input_configs));
+  InputConfigs* configs = malloc(sizeof(InputConfigs));
   if (!configs) {
     perror("Erro ao armazenar estrutura de configuração\n");
     fclose(file);
@@ -262,9 +261,9 @@ struct input_configs* load_input_configs(const char* filepath) {
   }
 
   // Linha 4+: Linhas de focos de incêndio 
-  configs->FOCOS_INCENDIO = (FocoIncendio**) malloc(configs->F * sizeof(FocoIncendio*));
+  configs->FOCOS_INCENDIO = malloc(configs->F * sizeof(FocoIncendio*));
   for (int i = 0; i < configs->F; i++) {
-    configs->FOCOS_INCENDIO[i] = (FocoIncendio*) malloc(sizeof(FocoIncendio));
+    configs->FOCOS_INCENDIO[i] = malloc(sizeof(FocoIncendio));
   }
   
   for (int i = 0; i < configs->F; i++) {
@@ -284,9 +283,9 @@ struct input_configs* load_input_configs(const char* filepath) {
     }
   }
 
-  configs->ZONAS_CONTENCAO = (ZonaContencao**) malloc(configs->Z * sizeof(ZonaContencao*));
+  configs->ZONAS_CONTENCAO = malloc(configs->Z * sizeof(ZonaContencao*));
   for (int i = 0; i < configs->Z; i++) {
-    configs->ZONAS_CONTENCAO[i] =  (ZonaContencao*) malloc(sizeof(ZonaContencao));
+    configs->ZONAS_CONTENCAO[i] = malloc(sizeof(ZonaContencao));
   }
 
   for (int i = 0; i < configs->Z; i++) { 
@@ -313,7 +312,7 @@ struct input_configs* load_input_configs(const char* filepath) {
   return configs;
 }
 
-void free_input_configs(struct input_configs* configs) {
+void free_input_configs(InputConfigs* configs) {
   if (!configs) return;
 
   if (configs->FOCOS_INCENDIO) {
@@ -333,7 +332,7 @@ void free_input_configs(struct input_configs* configs) {
   free(configs);
 }
 
-void print_loaded_input_configs(struct input_configs* configs) {
+void print_loaded_input_configs(InputConfigs* configs) {
   printf("=== Input Configuration Loaded ===\n");
   printf("Matrix (LxC) | Steps (P) | Threads (T) | Seed | Limiar\n");
   printf("%dx%d | %d | %d | %d | %d\n",
@@ -356,7 +355,7 @@ void print_loaded_input_configs(struct input_configs* configs) {
   }
 }
 
-bool is_valid_F_Z(struct input_configs* configs) {
+bool is_valid_F_Z(InputConfigs* configs) {
   // Validação 5: Focos e Zonas
 
   // Validação 5.1: F >= 0
@@ -379,7 +378,7 @@ bool is_valid_F_Z(struct input_configs* configs) {
  * 
  * 5.5: Focos de incêndio
  */
-bool is_valid_matrix_focos_incendio(struct input_configs* configs) {
+bool is_valid_matrix_focos_incendio(InputConfigs* configs) {
   if (configs->F == 0) return true;
 
   int L = configs->FOCOS_INCENDIO[0]->L;
@@ -422,7 +421,7 @@ bool is_valid_matrix_focos_incendio(struct input_configs* configs) {
  * 
  * 5.6: Zonas de contenção
  */
-bool is_valid_matrix_zonas_contencao(struct input_configs* configs) {
+bool is_valid_matrix_zonas_contencao(InputConfigs* configs) {
 
   if (configs->Z == 0) return true;
 
@@ -481,7 +480,7 @@ bool is_valid_matrix_zonas_contencao(struct input_configs* configs) {
  * 
  * 5.4: componentes do vento entre -1 e 1, direção diferente de (0,0), intensidade entre 0 e 5
  */
-bool is_valid_configs_vento(struct input_configs* configs) {
+bool is_valid_configs_vento(InputConfigs* configs) {
   // Validação 4: Vento
 
   // Validação 4.1: -1 <= VENTO_LINHA <= 1 e -1 <= VENTO_COLUNA <= 1
@@ -530,7 +529,7 @@ bool is_valid_configs_vento(struct input_configs* configs) {
  *  - limites iniciais não superiores aos finais
  *  - 0 ≤ passo_ativacao < P
  */
-bool is_valid_input_configs(struct input_configs* configs) {
+bool is_valid_input_configs(InputConfigs* configs) {
   return is_valid_configs_first_line(configs) &&
     is_valid_configs_vento(configs) &&
     is_valid_matrix_focos_incendio(configs) && 
@@ -556,7 +555,7 @@ bool is_valid_single_input_argument(int argc) {
  *      20 a 54 2 vegetação rasteira (35%)
  *      55 a 99 3 Floresta (45%)
  */
-int generate_cobertura(struct input_configs* configs) {
+int generate_cobertura(InputConfigs* configs) {
   int valor = rand_r(&configs->SEED) % 100;
   if (valor <= 9) return 0;
   if (valor <= 19) return 1;
@@ -586,7 +585,7 @@ int generate_fator_incendio(int id_cobertura) {
  * 6.3: Geração da umidade
  *  - umidade = rand_r(&seed) % 101
  */
-int generate_umidade(struct input_configs* configs) {
+int generate_umidade(InputConfigs* configs) {
   return rand_r(&configs->SEED) % 101;
 }
 
@@ -617,7 +616,7 @@ unsigned long long calculate_linear_matrix_index(int row, int col, int C) {
  * 
  * 5.6: Focos de incêndio
  */
-bool is_valid_foco_incendio_sobre_celula_combustivel(struct input_configs* configs, int id_cobertura, unsigned long long idx) {
+bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, unsigned long long idx) {
   // Validação 6.3: Focos sobre células de combustivels
 
   if (id_cobertura == 2 || id_cobertura == 3) return true;
@@ -663,7 +662,7 @@ bool is_valid_foco_incendio_sobre_celula_combustivel(struct input_configs* confi
  *      4 contenção
  * 
  */
-bool populate_matrix(struct input_configs* configs, Celula *matrix) {
+bool populate_matrix(InputConfigs* configs, Celula *matrix) {
   if (!configs || !matrix) return false;
 
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
@@ -681,7 +680,7 @@ bool populate_matrix(struct input_configs* configs, Celula *matrix) {
   return true;
 }
 
-Celula *copy_matrix(struct input_configs* configs, Celula *matrix) {
+Celula *copy_matrix(InputConfigs* configs, Celula *matrix) {
   if (!configs || !matrix) return false;
   Celula *cp_matrix = build_linear_state_matrix(configs);
 
@@ -696,7 +695,7 @@ Celula *copy_matrix(struct input_configs* configs, Celula *matrix) {
   return cp_matrix;
 }
 
-void print_state_matrix(struct input_configs* configs, Celula* matrix, int metric) {
+void print_state_matrix(InputConfigs* configs, Celula* matrix, int metric) {
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
     if (i % configs->C  == 0) printf("\n");
     switch (metric){
@@ -723,7 +722,7 @@ void print_state_matrix(struct input_configs* configs, Celula* matrix, int metri
   printf("\n");
 }
 
-void free_simulation_matrix(struct input_configs* configs, Celula* matrix) {
+void free_simulation_matrix(InputConfigs* configs, Celula* matrix) {
   if (!matrix) return;
   free(matrix);
 }
@@ -735,16 +734,16 @@ void free_simulation_matrix(struct input_configs* configs, Celula* matrix) {
  *  - armazenamento linear
  *  - cada célula apresenta cobertura, umidade, estado e tempo de queima
  */
-Celula *build_linear_state_matrix(struct input_configs* configs) {
-  Celula *matrix = (Celula*) malloc((size_t) configs->L * configs->C * sizeof(Celula));
+Celula *build_linear_state_matrix(InputConfigs* configs) {
+  Celula *matrix = malloc((size_t) configs->L * configs->C * sizeof(Celula));
   if (!matrix) return NULL;
 
   return matrix;
 }
 
 
-Metrics *build_metrics_vector(struct input_configs* configs) {
-  Metrics *vector = (Metrics*) malloc(configs->L * configs->C * sizeof(Metrics));
+Metrics *build_metrics_vector(InputConfigs* configs) {
+  Metrics *vector = malloc(configs->L * configs->C * sizeof(Metrics));
   if (!vector) return NULL;
 
   // Inicializar com 0
@@ -780,7 +779,7 @@ void free_mapa_contencao_vector(int *vector) {
  *  - O tempo inicial de queima será de 02 passos para Vegetação Rasteira e de 04 
  *    passos para Floresta
  */
-void apply_focos_iniciais_incendio(struct input_configs* configs, Celula* matrix) {
+void apply_focos_iniciais_incendio(InputConfigs* configs, Celula* matrix) {
   for (int i = 0; i < configs->F; i++) {
     unsigned long long idx = calculate_linear_matrix_index(configs->FOCOS_INCENDIO[i]->L, configs->FOCOS_INCENDIO[i]->C, configs->C);
     matrix[idx].ID_ESTADO = 2;
@@ -802,7 +801,7 @@ void apply_focos_iniciais_incendio(struct input_configs* configs, Celula* matrix
  * 6.6: Construção do mapa de contenção
  *  - Retorno para -1 ou min(passo_ativação) caso zonas sobrepostas
  */
-int get_passo_ativacao_if_cell_in_zona_contencao(int row, int col, struct input_configs* configs) {
+int get_passo_ativacao_if_cell_in_zona_contencao(int row, int col, InputConfigs* configs) {
   // Obter mínimo caso célula pertencer a zonas de contenção sobrepostas
   // max(passo) = P-1
   int min_passo_ativacao = configs->P;
@@ -823,7 +822,7 @@ int get_passo_ativacao_if_cell_in_zona_contencao(int row, int col, struct input_
  * 6.6: Construção do mapa de contenção
  *  - ativacao[indice], contendo o valor -1 ou o número do passo de ativação da zona
  */
-int *build_mapa_contencao(struct input_configs* configs, Celula* matrix) {
+int *build_mapa_contencao(InputConfigs* configs, Celula* matrix) {
   int *ativacao = (int*) malloc((size_t) configs->L * configs->C * sizeof(int));
   if (!ativacao) return NULL;
 
@@ -841,7 +840,7 @@ int *build_mapa_contencao(struct input_configs* configs, Celula* matrix) {
  * 7.2: Ativação de zonas de contenção
  *  - Mudança de estado: Se instante p, intacta -> Contenção
  */
-void activate_zonas_contencao(struct input_configs* configs, Celula* matrix, int *vetor_ativacao, int p) {
+void activate_zonas_contencao(InputConfigs* configs, Celula* matrix, int *vetor_ativacao, int p) {
   if (!configs || !matrix || !vetor_ativacao) return;
 
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
@@ -856,7 +855,7 @@ void activate_zonas_contencao(struct input_configs* configs, Celula* matrix, int
 }
 
 bool check_in_matrix_boundaries(
-  struct input_configs* configs, 
+  InputConfigs* configs,
   int neighbor_row,
   int neighbor_col
 ) {
@@ -872,7 +871,7 @@ bool check_in_matrix_boundaries(
  * 8.1: Sentido de propagação do vento
  * 
  */
-int calculate_potencial_ignicao(struct input_configs* configs, int idx_atual, Celula* matrix_atual) {
+int calculate_potencial_ignicao(InputConfigs* configs, int idx_atual, Celula* matrix_atual) {
   // Vizinhos de Moore para matriz linear, sendo 
   //  - x a posição da célula corrente, dado por (x_i, x_j)
   //  - L: número de linhas na matriz
@@ -963,7 +962,7 @@ int calculate_potencial_ignicao(struct input_configs* configs, int idx_atual, Ce
  * 
  * 8. Cálculo do potencial de ignição
  */
-void update_matrix(struct input_configs* configs, Celula* matrix_atual, Celula* matrix_proximo) {
+void update_matrix(InputConfigs* configs, Celula* matrix_atual, Celula* matrix_proximo) {
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
     matrix_proximo[i].ID_ESTADO = matrix_atual[i].ID_ESTADO;
     // Célula que permanecem
@@ -1011,7 +1010,7 @@ void update_matrix(struct input_configs* configs, Celula* matrix_atual, Celula* 
  *  - Após P passos: p > P
  *  - Na ausência de células em chamas
  */
-bool check_stop_condition(struct input_configs* configs, Metrics item_vetor_tempo) {
+bool check_stop_condition(InputConfigs* configs, Metrics item_vetor_tempo) {
   return item_vetor_tempo.EM_CHAMAS != 0 && item_vetor_tempo.PASSO < configs->P;
 }
 
@@ -1046,11 +1045,10 @@ void print_metrics(Metrics item_vetor_tempo) {
  * 10.3: Percentual protegido
  */
 void calculate_metrics_resultados(
-  int p, 
-  struct input_configs* configs, 
-  Metrics* vetor_tempo_atual, 
-  Metrics* vetor_proximo_tempo, 
-  Celula* matrix_atual, 
+  int p,
+  InputConfigs* configs,
+  Metrics* vetor_tempo_atual,
+  Celula* matrix_atual,
   Celula* matrix_proximo
 ) {
   vetor_tempo_atual[p].PASSO = p;
@@ -1115,7 +1113,7 @@ void calculate_metrics_resultados(
  * 
  */
 void run_simulation(
-  struct input_configs* configs,
+  InputConfigs* configs,
   Celula *matrix_estado_atual,
   Celula *matrix_proximo_estado,
   int *vetor_ativacao,
@@ -1142,7 +1140,7 @@ void run_simulation(
     update_matrix(configs, matrix_estado_atual, matrix_proximo_estado);
     
     // 3. Calcular estatísticas do próximo estado
-    calculate_metrics_resultados(p, configs, vetor_tempo_atual, vetor_proximo_tempo, matrix_estado_atual, matrix_proximo_estado);
+    calculate_metrics_resultados(p, configs, vetor_tempo_atual, matrix_estado_atual, matrix_proximo_estado);
     
     /**
      * ========================================
@@ -1178,7 +1176,7 @@ void run_simulation(
  * 
  * 10.4. Checksum
  */
-unsigned long long calculate_checksum(struct input_configs* configs, Celula* matrix_estado_atual, Metrics* vetor_tempo_atual) {
+unsigned long long calculate_checksum(InputConfigs* configs, Celula* matrix_estado_atual, Metrics* vetor_tempo_atual) {
   unsigned long long checksum = 0;
   for (long long i = 0; i < configs->L * configs->C; i++) {
     checksum = checksum*31ULL + (unsigned long long)matrix_estado_atual[i].ID_ESTADO;
@@ -1188,13 +1186,21 @@ unsigned long long calculate_checksum(struct input_configs* configs, Celula* mat
 }
 
 
+void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual, Metrics *vetor_tempo_atual, Metrics *vetor_proximo_tempo, int *vetor_ativacao) {
+  free_simulation_matrix(configs, matrix_estado_atual);
+  free_metrics_vector(vetor_tempo_atual);
+  free_metrics_vector(vetor_proximo_tempo);
+  free_mapa_contencao_vector(vetor_ativacao);
+  free_input_configs(configs);
+}
+
 int main(int argc, char* argv[]) {
   if (!is_valid_single_input_argument(argc)) {
     perror("Entrada inválida. A execução do programa requer um argumento: ./program <input_configs_filename>\n");
     return EXIT_FAILURE;
   }
 
-  struct input_configs* configs = load_input_configs(argv[1]);
+  InputConfigs* configs = load_input_configs(argv[1]);
   if (!configs) {
     perror("Arquivo de configurações inválido.\n");
     free_input_configs(configs);
@@ -1216,21 +1222,15 @@ int main(int argc, char* argv[]) {
 
   if (!matrix_estado_atual || !vetor_tempo_atual || !vetor_proximo_tempo || !vetor_ativacao) {
     perror("Falha ao alocar memória para matriz");
-    free_simulation_matrix(configs, matrix_estado_atual);
-    free_metrics_vector(vetor_tempo_atual);
-    free_metrics_vector(vetor_proximo_tempo);
-    free_mapa_contencao_vector(vetor_ativacao);
-    free_input_configs(configs);
+
+    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
   if (!populate_matrix(configs, matrix_estado_atual)) {
     perror("Falha ao popular matriz.\n");
-    free_simulation_matrix(configs, matrix_estado_atual);
-    free_metrics_vector(vetor_tempo_atual);
-    free_metrics_vector(vetor_proximo_tempo);
-    free_mapa_contencao_vector(vetor_ativacao);
-    free_input_configs(configs);
+
+    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
@@ -1244,11 +1244,7 @@ int main(int argc, char* argv[]) {
   // unsigned long long checksum = calculate_checksum(configs, matrix_estado_atual, vetor_tempo_atual);
   // printf("Checksum: %llu\n", checksum);
 
-  free_simulation_matrix(configs, matrix_estado_atual);
+  cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
   free_simulation_matrix(configs, matrix_proximo_estado);
-  free_metrics_vector(vetor_tempo_atual);
-  free_metrics_vector(vetor_proximo_tempo);
-  free_mapa_contencao_vector(vetor_ativacao);
-  free_input_configs(configs);
   return EXIT_SUCCESS;
 }
