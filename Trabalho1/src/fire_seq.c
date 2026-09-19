@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <omp.h>
 
 /**
  * Definições de foco de incêndio
@@ -61,8 +62,6 @@ typedef struct {
  * QUEIMADAS: total de células em estado 3 (queimada)
  * CONTENCAO: total de células em estado 4 (contenção)
  * TOTAL_IGNICOES: total de ignoções ocorridas no passo atual
- * PERCENTUAL_QUEIMADO: perc. de queimadas em relação ao estado inicial
- * PERCENTUAL_PROTEGIDO: perc. de celulas de contenção em relação aos combustiveis no estado inicial
  */
 typedef struct {
   int PASSO;
@@ -73,8 +72,7 @@ typedef struct {
   int QUEIMADAS;
   int CONTENCAO;
   int TOTAL_IGNICOES;
-  float PERCENTUAL_QUEIMADO;
-  float PERCENTUAL_PROTEGIDO;
+  double TEMPO;
 } Metrics;
 
 /**
@@ -754,10 +752,9 @@ Metrics *build_metrics_vector(InputConfigs* configs) {
     vector[i].NAO_COMBUSTIVEIS = 0;
     vector[i].COMBUSTIVEIS = 0;
     vector[i].PASSO = 0;
-    vector[i].PERCENTUAL_PROTEGIDO = 0;
-    vector[i].PERCENTUAL_QUEIMADO = 0;
     vector[i].QUEIMADAS = 0;
     vector[i].TOTAL_IGNICOES = 0;
+    vector[i].TEMPO = 0;
   }
   return vector;
 }
@@ -1015,11 +1012,11 @@ bool check_stop_condition(InputConfigs* configs, Metrics item_vetor_tempo) {
 }
 
 void print_metrics_csv_header() {
-  printf("PASSO,COMBUSTIVEIS,NAO_COMBUSTIVEIS,INTACTAS,EM_CHAMAS,QUEIMADAS,CONTENCAO,TOTAL_IGNICOES,PERCENTUAL_QUEIMADO,PERCENTUAL_PROTEGIDO\n");
+  printf("PASSO,COMBUSTIVEIS,NAO_COMBUSTIVEIS,INTACTAS,EM_CHAMAS,QUEIMADAS,CONTENCAO,TOTAL_IGNICOES\n");
 }
 
 void print_metrics(Metrics item_vetor_tempo) {
-  printf("%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f\n", 
+  printf("%d,%d,%d,%d,%d,%d,%d,%d\n", 
       item_vetor_tempo.PASSO,
       item_vetor_tempo.COMBUSTIVEIS,
       item_vetor_tempo.NAO_COMBUSTIVEIS,
@@ -1027,9 +1024,7 @@ void print_metrics(Metrics item_vetor_tempo) {
       item_vetor_tempo.EM_CHAMAS,
       item_vetor_tempo.QUEIMADAS,
       item_vetor_tempo.CONTENCAO,
-      item_vetor_tempo.TOTAL_IGNICOES,
-      item_vetor_tempo.PERCENTUAL_QUEIMADO,
-      item_vetor_tempo.PERCENTUAL_PROTEGIDO
+      item_vetor_tempo.TOTAL_IGNICOES
     );
 }
 
@@ -1079,16 +1074,36 @@ void calculate_metrics_resultados(
     }
   }
   vetor_tempo_atual[p].COMBUSTIVEIS = combustiveis_iniciais;
-  
-  // 𝑝𝑒𝑟𝑐𝑒𝑛𝑡𝑢𝑎𝑙_𝑞𝑢𝑒𝑖𝑚𝑎𝑑𝑜 = 100 × (𝑞𝑢𝑒𝑖𝑚𝑎𝑑𝑎𝑠 + 𝑒𝑚_𝑐ℎ𝑎𝑚𝑎𝑠 / 𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑖𝑠_𝑖𝑛𝑖𝑐𝑖𝑎𝑖s)
-  vetor_tempo_atual[p].PERCENTUAL_QUEIMADO = combustiveis_iniciais == 0 
-    ? 0 
-    : 100 * ((float)(vetor_tempo_atual[p].QUEIMADAS + vetor_tempo_atual[p].EM_CHAMAS) / combustiveis_iniciais);
+}
 
+float calculate_percentual_queimado(int passo, Metrics* vetor_tempo) {
+  // 𝑝𝑒𝑟𝑐𝑒𝑛𝑡𝑢𝑎𝑙_𝑞𝑢𝑒𝑖𝑚𝑎𝑑𝑜 = 100 × (𝑞𝑢𝑒𝑖𝑚𝑎𝑑𝑎𝑠 + 𝑒𝑚_𝑐ℎ𝑎𝑚𝑎𝑠 / 𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑖𝑠_𝑖𝑛𝑖𝑐𝑖𝑎𝑖s)
+  return vetor_tempo[passo].COMBUSTIVEIS == 0 
+    ? 0 
+    : 100 * ((float)(vetor_tempo[passo].QUEIMADAS + vetor_tempo[passo].EM_CHAMAS) / vetor_tempo[passo].COMBUSTIVEIS);
+}
+
+float calculate_percentual_protegido(int passo, Metrics* vetor_tempo) {
   // 𝑝𝑒𝑟𝑐𝑒𝑛𝑡𝑢𝑎𝑙_𝑝𝑟𝑜𝑡𝑒𝑔𝑖𝑑𝑜 = 100 × (𝑐𝑜𝑛𝑡𝑒𝑛𝑐𝑎𝑜 / 𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝑖𝑣𝑒𝑖𝑠_𝑖𝑛𝑖𝑐𝑖𝑎𝑖𝑠)
-  vetor_tempo_atual[p].PERCENTUAL_PROTEGIDO = combustiveis_iniciais == 0
+  return vetor_tempo[passo].COMBUSTIVEIS == 0
     ? 0
-    : 100 * ((float)(vetor_tempo_atual[p].CONTENCAO) / combustiveis_iniciais);
+    : 100 * ((float)(vetor_tempo[passo].CONTENCAO) / vetor_tempo[passo].COMBUSTIVEIS);
+}
+
+int calculate_max_ignicoes(int passo, Metrics* vetor_tempo, int* passo_max_ign) {
+  int max_ignicoes = vetor_tempo[0].TOTAL_IGNICOES;
+  int passo_max = 0;
+  *passo_max_ign = 0;
+  for (int i = 0; i < passo; i++) {
+    if (vetor_tempo[i].TOTAL_IGNICOES > max_ignicoes) {
+      max_ignicoes = vetor_tempo[i].TOTAL_IGNICOES;
+      passo_max = i;
+    }
+  }
+
+  *passo_max_ign = passo_max;
+
+  return max_ignicoes;
 }
 
 /**
@@ -1112,7 +1127,7 @@ void calculate_metrics_resultados(
  *      Contenção       Contenção
  * 
  */
-void run_simulation(
+int run_simulation(
   InputConfigs* configs,
   Celula *matrix_estado_atual,
   Celula *matrix_proximo_estado,
@@ -1127,11 +1142,14 @@ void run_simulation(
    *  - time_series
    * ========================================
    */
-  print_metrics_csv_header();
+  // print_metrics_csv_header();
 
   int p = 0;
   do {
     // Para cada passo p da simulação
+
+    // Armazenar tempo de execução
+    vetor_tempo_atual[p].TEMPO = omp_get_wtime();
     
     // 1. Ativar as zonas programadas para p
     activate_zonas_contencao(configs, matrix_estado_atual, vetor_ativacao, p);
@@ -1149,7 +1167,7 @@ void run_simulation(
      *  - time_series
      * ========================================
      */
-    print_metrics(vetor_tempo_atual[p]);
+    // print_metrics(vetor_tempo_atual[p]);
     
     /**
      * ========================================
@@ -1169,6 +1187,8 @@ void run_simulation(
     p++;
     // 5. Verificar condição de parada
   } while (check_stop_condition(configs, vetor_tempo_atual[p-1]));
+
+  return p-1;
 }
 
 /**
@@ -1192,6 +1212,23 @@ void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual
   free_metrics_vector(vetor_proximo_tempo);
   free_mapa_contencao_vector(vetor_ativacao);
   free_input_configs(configs);
+}
+
+void print_final_report(int passo, unsigned long long checksum, Metrics *vetor_tempo) {
+  int passo_max_ignicao = 0;
+  int max_ignicoes = calculate_max_ignicoes(passo, vetor_tempo, &passo_max_ignicao);
+  printf("passos: %d\n", passo);
+  printf("nao_combustiveis: %d\n", vetor_tempo[passo].NAO_COMBUSTIVEIS);
+  printf("intactas: %d\n", vetor_tempo[passo].INTACTAS);
+  printf("em_chamas: %d\n", vetor_tempo[passo].EM_CHAMAS);
+  printf("queimadas: %d\n", vetor_tempo[passo].QUEIMADAS);
+  printf("contencao: %d\n", vetor_tempo[passo].CONTENCAO);
+  printf("total_ignicoes: %d\n", vetor_tempo[passo].TOTAL_IGNICOES);
+  printf("pico_ignicoes: %d %d\n", passo_max_ignicao, max_ignicoes);
+  printf("percentual_queimado: %.2f\n", calculate_percentual_queimado(passo, vetor_tempo));
+  printf("percentual_protegido: %.2f\n", calculate_percentual_protegido(passo, vetor_tempo));
+  printf("checksum: %llu\n", checksum);
+  printf("tempo: %.6f\n", vetor_tempo[passo].TEMPO - vetor_tempo[0].TEMPO);
 }
 
 int main(int argc, char* argv[]) {
@@ -1239,10 +1276,11 @@ int main(int argc, char* argv[]) {
   apply_focos_iniciais_incendio(configs, matrix_estado_atual);
   apply_focos_iniciais_incendio(configs, matrix_proximo_estado);
 
-  run_simulation(configs, matrix_estado_atual, matrix_proximo_estado, vetor_ativacao, vetor_tempo_atual, vetor_proximo_tempo);
+  int passo_final = run_simulation(configs, matrix_estado_atual, matrix_proximo_estado, vetor_ativacao, vetor_tempo_atual, vetor_proximo_tempo);
+  
+  unsigned long long checksum = calculate_checksum(configs, matrix_estado_atual, vetor_tempo_atual);
+  print_final_report(passo_final, checksum, vetor_tempo_atual);
 
-  // unsigned long long checksum = calculate_checksum(configs, matrix_estado_atual, vetor_tempo_atual);
-  // printf("Checksum: %llu\n", checksum);
 
   cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
   free_simulation_matrix(configs, matrix_proximo_estado);

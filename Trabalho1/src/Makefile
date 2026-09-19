@@ -1,5 +1,5 @@
-CFLAGS = -Wall -g
-LPTHREADFLAGS = -D_REENTRANT -lpthread
+CFLAGS = -Wall -g -s
+LPTHREADFLAGS = -D_REENTRANT -lpthread -fopenmp
 TARGET = fire_seq.out
 SRC = fire_seq.c
 INPUT_FILE = entrada_carga_pequena.txt
