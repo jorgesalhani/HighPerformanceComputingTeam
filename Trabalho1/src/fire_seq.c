@@ -1033,14 +1033,13 @@ void print_metrics(Metrics item_vetor_tempo) {
  * 10.3: Percentual protegido
  */
 void calculate_metrics_resultados(
-  int p,
   InputConfigs* configs,
-  Metrics* vetor_tempo_atual,
+  Metrics* vetor_item_tempo_atual,
   Celula* matrix_atual,
   Celula* matrix_proximo
 ) {
-  // Variáveis de acumulação (reduce)
-  int combustiveis_iniciais = 0;
+
+  int combustiveis = 0;
   int nao_combustiveis = 0;
   int intactas = 0;
   int total_ignicoes = 0;
@@ -1049,7 +1048,7 @@ void calculate_metrics_resultados(
   int contencao = 0;
   
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis_iniciais++;
+    if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
     
     switch (matrix_atual[i].ID_ESTADO) {
       case 0:
@@ -1071,16 +1070,15 @@ void calculate_metrics_resultados(
       default:
         break;
     }
-  }
+  }  
 
-  vetor_tempo_atual[p].PASSO = p;
-  vetor_tempo_atual[p].COMBUSTIVEIS = combustiveis_iniciais;
-  vetor_tempo_atual[p].NAO_COMBUSTIVEIS = nao_combustiveis;
-  vetor_tempo_atual[p].INTACTAS = intactas;
-  vetor_tempo_atual[p].TOTAL_IGNICOES = total_ignicoes;
-  vetor_tempo_atual[p].EM_CHAMAS = em_chamas;
-  vetor_tempo_atual[p].QUEIMADAS = queimadas;
-  vetor_tempo_atual[p].CONTENCAO = contencao;
+  vetor_item_tempo_atual->COMBUSTIVEIS = combustiveis;
+  vetor_item_tempo_atual->NAO_COMBUSTIVEIS = nao_combustiveis;
+  vetor_item_tempo_atual->INTACTAS = intactas;
+  vetor_item_tempo_atual->EM_CHAMAS = em_chamas;
+  vetor_item_tempo_atual->QUEIMADAS = queimadas;
+  vetor_item_tempo_atual->CONTENCAO = contencao;
+  vetor_item_tempo_atual->TOTAL_IGNICOES = total_ignicoes;
 }
 
 float calculate_percentual_queimado(int passo, Metrics* vetor_tempo) {
@@ -1162,7 +1160,8 @@ int run_simulation(
     Celula* matrix_proximo = matrices[(p+1) & 1];
 
     // Armazenar tempo de execução
-    // vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+    vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+    vetor_tempo_atual[p].PASSO = p;
     
     // 1. Ativar as zonas programadas para p
     activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
@@ -1171,7 +1170,7 @@ int run_simulation(
     update_matrix(configs, matrix_atual, matrix_proximo);
     
     // 3. Calcular estatísticas do próximo estado
-    calculate_metrics_resultados(p, configs, vetor_tempo_atual, matrix_atual, matrix_proximo);
+    calculate_metrics_resultados(configs, &vetor_tempo_atual[p], matrix_atual, matrix_proximo);
     
     /**
      * ========================================

@@ -1,7 +1,7 @@
-CFLAGS = -Wall -g -s
-LPTHREADFLAGS = -D_REENTRANT -lpthread -fopenmp
-TARGET = fire_seq.out
-SRC = fire_seq.c
+CFLAGS = -Wall -g
+LPTHREADFLAGS = -D_REENTRANT -fopenmp
+TARGET = fire_omp.out
+SRC = fire_omp.c
 INPUT_FILE = entrada_carga_pequena.txt
 OUTPUT_FILE = ../relatorio/output.out
 
@@ -11,7 +11,7 @@ ${TARGET}: ${SRC}
 	gcc ${CFLAGS} ${SRC} -o ${TARGET} ${LPTHREADFLAGS}
 
 run:
-	./${TARGET} ${INPUT_FILE} > ${OUTPUT_FILE}
+	./${TARGET} ${INPUT_FILE} >> ${OUTPUT_FILE}
 
 valgrind: all
 	valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes ./${TARGET} ${INPUT_FILE}
