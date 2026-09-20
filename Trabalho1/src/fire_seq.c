@@ -1162,7 +1162,7 @@ int run_simulation(
     Celula* matrix_proximo = matrices[(p+1) & 1];
 
     // Armazenar tempo de execução
-    vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+    // vetor_tempo_atual[p].TEMPO = omp_get_wtime();
     
     // 1. Ativar as zonas programadas para p
     activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
@@ -1214,8 +1214,9 @@ unsigned long long calculate_checksum(InputConfigs* configs, Celula* matrix_esta
 }
 
 
-void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual, Metrics *vetor_tempo_atual, Metrics *vetor_proximo_tempo, int *vetor_ativacao) {
+void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual, Celula *matrix_proximo_estado, Metrics *vetor_tempo_atual, Metrics *vetor_proximo_tempo, int *vetor_ativacao) {
   free_simulation_matrix(configs, matrix_estado_atual);
+  free_simulation_matrix(configs, matrix_proximo_estado);
   free_metrics_vector(vetor_tempo_atual);
   free_metrics_vector(vetor_proximo_tempo);
   free_mapa_contencao_vector(vetor_ativacao);
@@ -1268,18 +1269,23 @@ int main(int argc, char* argv[]) {
   if (!matrix_estado_atual || !vetor_tempo_atual || !vetor_proximo_tempo || !vetor_ativacao) {
     perror("Falha ao alocar memória para matriz");
 
-    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
   if (!populate_matrix(configs, matrix_estado_atual)) {
     perror("Falha ao popular matriz.\n");
 
-    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
   Celula *matrix_proximo_estado = copy_matrix(configs, matrix_estado_atual);
+  if (!matrix_proximo_estado) {
+    perror("Falha ao copiar matriz.\n");
+    cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    return EXIT_FAILURE;
+  }
 
   apply_focos_iniciais_incendio(configs, matrix_estado_atual);
   apply_focos_iniciais_incendio(configs, matrix_proximo_estado);
@@ -1290,7 +1296,6 @@ int main(int argc, char* argv[]) {
   print_final_report(passo_final, checksum, vetor_tempo_atual);
 
 
-  cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
-  free_simulation_matrix(configs, matrix_proximo_estado);
+  cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
   return EXIT_SUCCESS;
 }
