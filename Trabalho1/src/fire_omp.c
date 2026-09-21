@@ -957,43 +957,39 @@ void update_matrix(InputConfigs* configs, Celula* matrix_atual, Celula* matrix_p
       int idx = i * configs->C + j;
       matrix_proximo[idx].ID_ESTADO = matrix_atual[idx].ID_ESTADO;
 
-      // Célula que permanecem
-      // - não combustível (= 0)
-      // - queimada (= 3)
-      // - contenção (= 4)
-      if (
-        matrix_atual[idx].ID_ESTADO == 0 ||
-        matrix_atual[idx].ID_ESTADO == 3 ||
-        matrix_atual[idx].ID_ESTADO == 4
-      ) {
-        continue;
+      switch (matrix_atual[idx].ID_ESTADO) {
+        // Se célula em chamas (= 2)
+        case 2:
+          // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
+          if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
+            matrix_proximo[idx].ID_ESTADO = 3;
+          }
+          matrix_proximo[idx].TEMPO_QUEIMA--;
+          break;
+
+        // Caso célula intacta (= 1), calcular potencial de ignicao
+        case 1:
+          // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
+          int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
+
+          // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
+          if (potencial_ignicao < configs->LIMIAR) continue;
+          
+          // Caso contrário, transitar para em chamas (= 2)
+          matrix_proximo[idx].ID_ESTADO = 2;
+          
+          // Atualizar tempo de queima
+          // Se vegetação rasteira (= 2), tempo de quima = 2
+          // Se floresta (= 3), tempo de queima = 4
+          matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
+       
+        // Célula que permanecem
+        // - não combustível (= 0)
+        // - queimada (= 3)
+        // - contenção (= 4)
+        default:
+          break;
       }
-
-      // Se célula em chamas (= 2)
-      if (matrix_atual[idx].ID_ESTADO == 2) {
-        // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
-        if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
-          matrix_proximo[idx].ID_ESTADO = 3;
-          continue;
-        }
-
-        matrix_proximo[idx].TEMPO_QUEIMA--;
-        continue;
-      }
-
-      // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
-      int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
-
-      // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
-      if (potencial_ignicao < configs->LIMIAR) continue;
-      
-      // Caso contrário, transitar para em chamas (= 2)
-      matrix_proximo[idx].ID_ESTADO = 2;
-      
-      // Atualizar tempo de queima
-      // Se vegetação rasteira (= 2), tempo de quima = 2
-      // Se floresta (= 3), tempo de queima = 4
-      matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
     }
   }
 }
