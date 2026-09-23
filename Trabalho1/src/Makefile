@@ -1,5 +1,5 @@
 CFLAGS = -Wall -g
-LPTHREADFLAGS = -D_REENTRANT -fopenmp
+LPTHREADFLAGS = -D_REENTRANT -O3 -fopenmp -march=native
 TARGET = fire_omp.out
 SRC = fire_omp.c
 INPUT_FILE = entrada_carga_pequena.txt
