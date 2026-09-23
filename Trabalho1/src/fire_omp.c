@@ -1192,11 +1192,18 @@ int run_simulation(
       {
         vetor_tempo_atual[p].TEMPO = omp_get_wtime();
         vetor_tempo_atual[p].PASSO = p;
+        combustiveis = 0;
+        nao_combustiveis = 0;
+        intactas = 0;
+        total_ignicoes = 0;
+        em_chamas = 0;
+        queimadas = 0;
+        contencao = 0;
       }
-      
+    
       // 1. Ativar as zonas programadas para p
       activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
-      
+
       // 2. Calcular o próximo estado de todas as células
       update_matrix(configs, matrix_atual, matrix_proximo);
       
