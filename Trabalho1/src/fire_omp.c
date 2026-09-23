@@ -843,8 +843,10 @@ int *build_mapa_contencao(InputConfigs* configs, Celula* matrix) {
 void activate_zonas_contencao(const InputConfigs* restrict configs, Celula* restrict matrix, int *vetor_ativacao, int p) {
   if (!configs || !matrix || !vetor_ativacao) return;
 
+  const unsigned long long TOTAL_CELLS = configs->L * configs->C;
+
   #pragma omp parallel for schedule(static) num_threads(configs->T)
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
+  for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
     // Se intacta (= 1) e no instante de ativação (vet_ativ[i] = p) 
     //  transicionar para contenção (= 4): 1 -> 4
     if (vetor_ativacao[i] == p && matrix[i].ID_ESTADO == 1) matrix[i].ID_ESTADO = 4;
@@ -896,6 +898,9 @@ int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, i
   // Casos de borda: vizinhos fora da matriz serão ignorados
 
   // Já calcular peso basico. prim4: ortogonais. last4: diagonais
+  // Casos peso_basico:
+  //  - Vizinho ortogonal: 10
+  //  - Vizinho diagonal: 7
   static const int peso_basico[8] = {10, 10, 10, 10, 7, 7, 7, 7};
 
   
@@ -925,23 +930,19 @@ int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, i
       
       // Considerar apernas se vizinho em estado 'em chamas'
       if (matrix_atual[idx_vizinho].ID_ESTADO == 2) {
-        // Casos peso_basico:
-        //  - Vizinho ortogonal: 10
-        //  - Vizinho diagonal: 7
   
         // 𝐴 = 𝑝𝑟𝑜𝑝_𝑙𝑖𝑛ℎ𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑙𝑖𝑛ℎ𝑎 + 𝑝𝑟𝑜𝑝_𝑐𝑜𝑙𝑢𝑛𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑐𝑜𝑙𝑢𝑛a
         const int A = prop_linha*V_LINHA + prop_coluna*V_COLUNA;
   
         // 𝑃𝑣 = max(1, 𝑃básico + 𝑖𝑛𝑡𝑒𝑛𝑠𝑖𝑑𝑎𝑑𝑒 × 𝐴)
         const int peso_calculado_int_a = peso_basico[i] + (V_INTENS * A);
-        const int peso_vizinho = peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
   
-        S += peso_vizinho;
+        S += peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
       }
     }
   }
 
-  unsigned long long idx_atual = row * C + col;
+  const unsigned long long idx_atual = row * C + col;
 
   // 𝐼 = floor(𝑆 × 𝑓𝑎𝑡𝑜𝑟_𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑙 × (100 − 𝑢𝑚𝑖𝑑𝑎𝑑𝑒) / 100)
   return (S * matrix_atual[idx_atual].FATOR_INCENDIO * (100 - matrix_atual[idx_atual].UMIDADE)) / 100 ;
@@ -986,7 +987,6 @@ void update_matrix(
       } else 
       // Caso célula intacta (= 1), calcular potencial de ignicao
       if (matrix_atual[idx].ID_ESTADO == 1) {
-        // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
         const int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
 
         // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
