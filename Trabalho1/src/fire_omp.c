@@ -840,7 +840,7 @@ int *build_mapa_contencao(InputConfigs* configs, Celula* matrix) {
  * 7.2: Ativação de zonas de contenção
  *  - Mudança de estado: Se instante p, intacta -> Contenção
  */
-void activate_zonas_contencao(InputConfigs* configs, Celula* matrix, int *vetor_ativacao, int p) {
+void activate_zonas_contencao(const InputConfigs* restrict configs, Celula* restrict matrix, int *vetor_ativacao, int p) {
   if (!configs || !matrix || !vetor_ativacao) return;
 
   #pragma omp parallel for schedule(static) num_threads(configs->T)
@@ -852,7 +852,7 @@ void activate_zonas_contencao(InputConfigs* configs, Celula* matrix, int *vetor_
 }
 
 bool check_in_matrix_boundaries(
-  InputConfigs* configs,
+  const InputConfigs* restrict configs,
   int neighbor_row,
   int neighbor_col
 ) {
@@ -868,7 +868,7 @@ bool check_in_matrix_boundaries(
  * 8.1: Sentido de propagação do vento
  * 
  */
-int calculate_potencial_ignicao(InputConfigs* configs, int row, int col, Celula* matrix_atual) {
+int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, int col, const Celula* restrict matrix_atual) {
   // Vizinhos de Moore para matriz linear, sendo 
   //  - x a posição da célula corrente, dado por (x_i, x_j)
   //  - L: número de linhas na matriz
@@ -890,45 +890,55 @@ int calculate_potencial_ignicao(InputConfigs* configs, int row, int col, Celula*
   // op linha: x_i - C + { 0,  0, -1, +1, -1, -1, +1, +1}
   // op colun: x_j - L + {-1, +1,  0,  0, -1, +1, -1, +1}
 
-  int vet_linha[8] = { 0,  0, -1, 1, -1, -1, 1, 1};
-  int vet_coluna[8] = {-1, 1,  0,  0, -1, 1, -1, 1};
+  static const int vet_linha[8] = { 0,  0, -1, 1, -1, -1, 1, 1};
+  static const int vet_coluna[8] = {-1, 1,  0,  0, -1, 1, -1, 1};
 
   // Casos de borda: vizinhos fora da matriz serão ignorados
+
+  // Já calcular peso basico. prim4: ortogonais. last4: diagonais
+  static const int peso_basico[8] = {10, 10, 10, 10, 7, 7, 7, 7};
+
   
   int C = configs->C;
+  const int V_LINHA = configs->VENTO_LINHA;
+  const int V_COLUNA = configs->VENTO_COLUNA;
+  const int V_INTENS = configs->V;
 
   // S = sum(𝑃𝑣)
   int S = 0;
   
-  for (int i = 0; i < 8; i++) {
+  // #pragma omp parallel for schedule(static) reduction(+:S)
+  for (int i = 0; i < 8; i++) { 
+    const int linha_vizinho = row + vet_linha[i];
+    const int coluna_vizinho = col + vet_coluna[i];
     
-    int linha_vizinho = row + vet_linha[i];
-    int coluna_vizinho = col + vet_coluna[i];
+    const int prop_linha = row - linha_vizinho;
+    const int prop_coluna = col - coluna_vizinho;
     
-    int prop_linha = row - linha_vizinho;
-    int prop_coluna = col - coluna_vizinho;
-    
-    // Caso fora dos limites, evitar calculo
-    if (!check_in_matrix_boundaries(configs, linha_vizinho, coluna_vizinho)) continue;
-    
-    int idx_vizinho = linha_vizinho * C + coluna_vizinho;
-    
-    // Considerar apernas se vizinho em estado 'em chamas'
-    if (matrix_atual[idx_vizinho].ID_ESTADO != 2) continue;
-
-    // Casos peso_basico:
-    //  - Vizinho ortogonal: 10
-    //  - Vizinho diagonal: 7
-    int peso_basico = (abs(prop_linha) + abs(prop_coluna) == 1) ? 10 : 7;
-
-    // 𝐴 = 𝑝𝑟𝑜𝑝_𝑙𝑖𝑛ℎ𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑙𝑖𝑛ℎ𝑎 + 𝑝𝑟𝑜𝑝_𝑐𝑜𝑙𝑢𝑛𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑐𝑜𝑙𝑢𝑛a
-    int A = prop_linha*configs->VENTO_LINHA + prop_coluna*configs->VENTO_COLUNA;
-
-    // 𝑃𝑣 = max(1, 𝑃básico + 𝑖𝑛𝑡𝑒𝑛𝑠𝑖𝑑𝑎𝑑𝑒 × 𝐴)
-    int peso_calculado_int_a = peso_basico + (configs->V * A);
-    int peso_vizinho = peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
-
-    S += peso_vizinho;
+    // Caso fora dos limites
+    // evitar chamada de função
+    if (
+      (linha_vizinho >= 0 && linha_vizinho < configs->L) &&
+      (coluna_vizinho >= 0 && coluna_vizinho < configs->C)
+    ) {
+      const int idx_vizinho = linha_vizinho * C + coluna_vizinho;
+      
+      // Considerar apernas se vizinho em estado 'em chamas'
+      if (matrix_atual[idx_vizinho].ID_ESTADO == 2) {
+        // Casos peso_basico:
+        //  - Vizinho ortogonal: 10
+        //  - Vizinho diagonal: 7
+  
+        // 𝐴 = 𝑝𝑟𝑜𝑝_𝑙𝑖𝑛ℎ𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑙𝑖𝑛ℎ𝑎 + 𝑝𝑟𝑜𝑝_𝑐𝑜𝑙𝑢𝑛𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑐𝑜𝑙𝑢𝑛a
+        const int A = prop_linha*V_LINHA + prop_coluna*V_COLUNA;
+  
+        // 𝑃𝑣 = max(1, 𝑃básico + 𝑖𝑛𝑡𝑒𝑛𝑠𝑖𝑑𝑎𝑑𝑒 × 𝐴)
+        const int peso_calculado_int_a = peso_basico[i] + (V_INTENS * A);
+        const int peso_vizinho = peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
+  
+        S += peso_vizinho;
+      }
+    }
   }
 
   unsigned long long idx_atual = row * C + col;
@@ -949,32 +959,38 @@ int calculate_potencial_ignicao(InputConfigs* configs, int row, int col, Celula*
  * 
  * 8. Cálculo do potencial de ignição
  */
-void update_matrix(InputConfigs* configs, Celula* matrix_atual, Celula* matrix_proximo) {
+void update_matrix(
+  const InputConfigs* restrict configs, 
+  const Celula* restrict matrix_atual, 
+  Celula* restrict matrix_proximo
+) {
+
+  const int C = configs->C;
+  const int L = configs->L;
+  const int LIMIAR = configs->LIMIAR;
 
   #pragma omp parallel for schedule(static) collapse(2) num_threads(configs->T)
-  for (int i = 0; i < configs->L; i++) {
-    for (int j = 0; j < configs->C; j++) {
-      int idx = i * configs->C + j;
+  for (int i = 0; i < L; i++) {
+    for (int j = 0; j < C; j++) {
+      int idx = i * C + j;
       matrix_proximo[idx].ID_ESTADO = matrix_atual[idx].ID_ESTADO;
 
-      switch (matrix_atual[idx].ID_ESTADO) {
-        // Se célula em chamas (= 2)
-        case 2:
-          // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
-          if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
-            matrix_proximo[idx].ID_ESTADO = 3;
-          }
+      // Se célula em chamas (= 2)
+      if (matrix_atual[idx].ID_ESTADO == 2) {
+        // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
+        if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
+          matrix_proximo[idx].ID_ESTADO = 3;
+        } else {
           matrix_proximo[idx].TEMPO_QUEIMA--;
-          break;
+        }
+      } else 
+      // Caso célula intacta (= 1), calcular potencial de ignicao
+      if (matrix_atual[idx].ID_ESTADO == 1) {
+        // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
+        const int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
 
-        // Caso célula intacta (= 1), calcular potencial de ignicao
-        case 1:
-          // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
-          int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
-
-          // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
-          if (potencial_ignicao < configs->LIMIAR) continue;
-          
+        // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
+        if (potencial_ignicao >= LIMIAR) {
           // Caso contrário, transitar para em chamas (= 2)
           matrix_proximo[idx].ID_ESTADO = 2;
           
@@ -982,14 +998,13 @@ void update_matrix(InputConfigs* configs, Celula* matrix_atual, Celula* matrix_p
           // Se vegetação rasteira (= 2), tempo de quima = 2
           // Se floresta (= 3), tempo de queima = 4
           matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
-       
-        // Célula que permanecem
-        // - não combustível (= 0)
-        // - queimada (= 3)
-        // - contenção (= 4)
-        default:
-          break;
+        };
       }
+
+      // Célula que permanecem
+      // - não combustível (= 0)
+      // - queimada (= 3)
+      // - contenção (= 4)
     }
   }
 }
@@ -1032,10 +1047,10 @@ void print_metrics(Metrics item_vetor_tempo) {
  * 10.3: Percentual protegido
  */
 void calculate_metrics_resultados(
-  InputConfigs* configs,
-  Metrics* vetor_item_tempo_atual,
-  Celula* matrix_atual,
-  Celula* matrix_proximo
+  const InputConfigs* restrict configs,
+  Metrics* restrict vetor_item_tempo_atual,
+  const Celula* restrict matrix_atual,
+  const Celula* restrict matrix_proximo
 ) {
 
   int combustiveis = 0;
@@ -1045,30 +1060,27 @@ void calculate_metrics_resultados(
   int em_chamas = 0;
   int queimadas = 0;
   int contencao = 0;
+
+  const unsigned long long TOTAL_CELLS = configs->L * configs->C;
   
   #pragma omp parallel for schedule(static) reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao) num_threads(configs->T)
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
+  for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
     if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
-    
-    switch (matrix_atual[i].ID_ESTADO) {
-      case 0:
-        nao_combustiveis++;
-        break;
-      case 1:
-        intactas++;
-        if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
-        break;
-      case 2:
-        em_chamas++;
-        break;
-      case 3:
-        queimadas++;
-        break;
-      case 4:
-        contencao++;
-        break;
-      default:
-        break;
+
+    if (matrix_atual[i].ID_ESTADO == 0) {
+      nao_combustiveis++;
+    } else 
+    if (matrix_atual[i].ID_ESTADO == 1) {
+      intactas++;
+      if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
+    } else 
+    if (matrix_atual[i].ID_ESTADO == 2) {
+      em_chamas++;
+    } else 
+    if (matrix_atual[i].ID_ESTADO == 3) {
+      queimadas++;
+    } else {
+      contencao++;
     }
   }  
 
@@ -1155,6 +1167,7 @@ int run_simulation(
 
   int p = 0;
   bool manter_simulacao = true;
+  const int P_TOTAL = configs->P;
   
   // #pragma omp parallel num_threads(configs->T)
   {
@@ -1202,7 +1215,8 @@ int run_simulation(
       
       // #pragma omp single
       {
-        manter_simulacao = check_stop_condition(configs, vetor_tempo_atual[p]);
+        // Evitar chamada de função
+        manter_simulacao = vetor_tempo_atual[p].EM_CHAMAS != 0 && vetor_tempo_atual[p].PASSO < P_TOTAL;
         p++;
       }
     } while (manter_simulacao);
