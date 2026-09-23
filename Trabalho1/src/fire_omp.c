@@ -845,7 +845,7 @@ void activate_zonas_contencao(const InputConfigs* restrict configs, Celula* rest
 
   const unsigned long long TOTAL_CELLS = configs->L * configs->C;
 
-  #pragma omp parallel for schedule(static) num_threads(configs->T)
+  #pragma omp for simd schedule(static)
   for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
     // Se intacta (= 1) e no instante de ativação (vet_ativ[i] = p) 
     //  transicionar para contenção (= 4): 1 -> 4
@@ -912,7 +912,6 @@ int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, i
   // S = sum(𝑃𝑣)
   int S = 0;
   
-  // #pragma omp parallel for schedule(static) reduction(+:S)
   for (int i = 0; i < 8; i++) { 
     const int linha_vizinho = row + vet_linha[i];
     const int coluna_vizinho = col + vet_coluna[i];
@@ -970,7 +969,7 @@ void update_matrix(
   const int L = configs->L;
   const int LIMIAR = configs->LIMIAR;
 
-  #pragma omp parallel for schedule(static) collapse(2) num_threads(configs->T)
+  #pragma omp for simd collapse(2) schedule(static)
   for (int i = 0; i < L; i++) {
     for (int j = 0; j < C; j++) {
       int idx = i * C + j;
@@ -1063,7 +1062,7 @@ void calculate_metrics_resultados(
 
   const unsigned long long TOTAL_CELLS = configs->L * configs->C;
   
-  #pragma omp parallel for schedule(static) reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao) num_threads(configs->T)
+  // #pragma omp for simd reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
   for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
     if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
 
@@ -1163,25 +1162,37 @@ int run_simulation(
 
   // Ponteiro fixo. Evitar necessidade de pointeiro temporário
   //  para realizar swap
-  Celula* matrices[2] = {matrix_estado_atual, matrix_proximo_estado};
+  Celula* const matrices[2] = {matrix_estado_atual, matrix_proximo_estado};
 
   int p = 0;
   bool manter_simulacao = true;
   const int P_TOTAL = configs->P;
+  const unsigned long long TOTAL_CELLS = (unsigned long long) configs->L * configs->C;
+
+  int combustiveis = 0;
+  int nao_combustiveis = 0;
+  int intactas = 0;
+  int total_ignicoes = 0;
+  int em_chamas = 0;
+  int queimadas = 0;
+  int contencao = 0;
   
-  // #pragma omp parallel num_threads(configs->T)
+  #pragma omp parallel num_threads(configs->T) default(none) \
+    shared(matrices, configs, vetor_ativacao, vetor_tempo_atual, \
+           p, manter_simulacao, P_TOTAL, TOTAL_CELLS, \
+           combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
   {
     do {
       // Para cada passo p da simulação
-      Celula* matrix_atual = matrices[p & 1];
-      Celula* matrix_proximo = matrices[(p+1) & 1];
+      Celula* const matrix_atual = matrices[p & 1];
+      Celula* const matrix_proximo = matrices[(p+1) & 1];
 
       // Armazenar tempo de execução
-      // #pragma omp single
-      // {
+      #pragma omp single
+      {
         vetor_tempo_atual[p].TEMPO = omp_get_wtime();
         vetor_tempo_atual[p].PASSO = p;
-      // }
+      }
       
       // 1. Ativar as zonas programadas para p
       activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
@@ -1190,7 +1201,28 @@ int run_simulation(
       update_matrix(configs, matrix_atual, matrix_proximo);
       
       // 3. Calcular estatísticas do próximo estado
-      calculate_metrics_resultados(configs, &vetor_tempo_atual[p], matrix_atual, matrix_proximo);
+      // calculate_metrics_resultados(configs, &vetor_tempo_atual[p], matrix_atual, matrix_proximo);
+    
+      #pragma omp for simd schedule(static) reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
+      for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
+        if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
+
+        if (matrix_atual[i].ID_ESTADO == 0) {
+          nao_combustiveis++;
+        } else 
+        if (matrix_atual[i].ID_ESTADO == 1) {
+          intactas++;
+          if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
+        } else 
+        if (matrix_atual[i].ID_ESTADO == 2) {
+          em_chamas++;
+        } else 
+        if (matrix_atual[i].ID_ESTADO == 3) {
+          queimadas++;
+        } else {
+          contencao++;
+        }
+      }  
       
       /**
        * ========================================
@@ -1213,8 +1245,16 @@ int run_simulation(
 
       // 5. Verificar condição de parada
       
-      // #pragma omp single
+      #pragma omp single
       {
+        vetor_tempo_atual[p].COMBUSTIVEIS = combustiveis;
+        vetor_tempo_atual[p].NAO_COMBUSTIVEIS = nao_combustiveis;
+        vetor_tempo_atual[p].INTACTAS = intactas;
+        vetor_tempo_atual[p].EM_CHAMAS = em_chamas;
+        vetor_tempo_atual[p].QUEIMADAS = queimadas;
+        vetor_tempo_atual[p].CONTENCAO = contencao;
+        vetor_tempo_atual[p].TOTAL_IGNICOES = total_ignicoes;
+        
         // Evitar chamada de função
         manter_simulacao = vetor_tempo_atual[p].EM_CHAMAS != 0 && vetor_tempo_atual[p].PASSO < P_TOTAL;
         p++;
