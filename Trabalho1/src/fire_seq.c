@@ -62,6 +62,7 @@ typedef struct {
  * QUEIMADAS: total de células em estado 3 (queimada)
  * CONTENCAO: total de células em estado 4 (contenção)
  * TOTAL_IGNICOES: total de ignoções ocorridas no passo atual
+ * TEMPO: tempo de execução instantânea do passo corrente
  */
 typedef struct {
   int PASSO;
@@ -124,7 +125,7 @@ bool is_valid_configs_vento(InputConfigs* configs);
 bool is_valid_F_Z(InputConfigs* configs);
 bool is_valid_matrix_focos_incendio(InputConfigs* configs);
 bool is_valid_matrix_zonas_contencao(InputConfigs* configs);
-bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, unsigned long long);
+bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, int row, int col);
 
 // Geração de cobertura
 Celula *build_linear_state_matrix(InputConfigs* configs);
@@ -614,16 +615,14 @@ unsigned long long calculate_linear_matrix_index(int row, int col, int C) {
  * 
  * 5.6: Focos de incêndio
  */
-bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, unsigned long long idx) {
+bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int id_cobertura, int row, int col) {
   // Validação 6.3: Focos sobre células de combustivels
 
   if (id_cobertura == 2 || id_cobertura == 3) return true;
 
-  int i = idx / configs->C;
-  int j = idx % configs->C;
   for (int k = 0; k < configs->F; k++) {
-    if (configs->FOCOS_INCENDIO[k]->L == i && configs->FOCOS_INCENDIO[k]->C == j) {
-      printf("Focos posicionados sobre células combustíveis. Informado: (L,C) = (%d,%d)\n", i, j);
+    if (configs->FOCOS_INCENDIO[k]->L == row && configs->FOCOS_INCENDIO[k]->C == col) {
+      printf("Focos posicionados sobre células combustíveis. Informado: (L,C) = (%d,%d)\n", row, col);
       return false;
     }
   }
@@ -663,18 +662,20 @@ bool is_valid_foco_incendio_sobre_celula_combustivel(InputConfigs* configs, int 
 bool populate_matrix(InputConfigs* configs, Celula *matrix) {
   if (!configs || !matrix) return false;
 
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    int id_cobertura = generate_cobertura(configs);
-    
-    matrix[i].ID_COBERTURA = id_cobertura;
-    matrix[i].FATOR_INCENDIO = generate_fator_incendio(id_cobertura);
-    matrix[i].UMIDADE = generate_umidade(configs);
-    matrix[i].ID_ESTADO = generate_estado(id_cobertura);
-    matrix[i].TEMPO_QUEIMA = 0;
-
-    if (!is_valid_foco_incendio_sobre_celula_combustivel(configs, id_cobertura, i)) return false;
+  for (int i = 0; i < configs->L; i++) {
+    for (int j = 0; j < configs->C; j++) {
+      unsigned long long idx = calculate_linear_matrix_index(i, j, configs->C); // row * C + col;
+      
+      int id_cobertura = generate_cobertura(configs);
+      matrix[idx].ID_COBERTURA = id_cobertura;
+      matrix[idx].FATOR_INCENDIO = generate_fator_incendio(id_cobertura);
+      matrix[idx].UMIDADE = generate_umidade(configs);
+      matrix[idx].ID_ESTADO = generate_estado(id_cobertura);
+      matrix[idx].TEMPO_QUEIMA = 0;
+      
+      if (!is_valid_foco_incendio_sobre_celula_combustivel(configs, id_cobertura, i, j)) return false;
+    }
   }
-
   return true;
 }
 
@@ -820,15 +821,17 @@ int get_passo_ativacao_if_cell_in_zona_contencao(int row, int col, InputConfigs*
  *  - ativacao[indice], contendo o valor -1 ou o número do passo de ativação da zona
  */
 int *build_mapa_contencao(InputConfigs* configs, Celula* matrix) {
-  int *ativacao = (int*) malloc((size_t) configs->L * configs->C * sizeof(int));
-  if (!ativacao) return NULL;
+    int *ativacao = (int*) malloc((size_t) configs->L * configs->C * sizeof(int));
+    if (!ativacao) return NULL;
 
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    int rowi = i / configs->C;
-    int coli = i % configs->C;
-    ativacao[i] = get_passo_ativacao_if_cell_in_zona_contencao(rowi, coli, configs);
-  }
-  return ativacao;
+    for (int rowi = 0; rowi < configs->L; rowi++) {
+        for (int coli = 0; coli < configs->C; coli++) {
+            unsigned long long i = rowi * configs->C + coli;
+            ativacao[i] = get_passo_ativacao_if_cell_in_zona_contencao(rowi, coli, configs);
+        }
+    }
+
+    return ativacao;
 }
 
 /**
@@ -841,13 +844,9 @@ void activate_zonas_contencao(InputConfigs* configs, Celula* matrix, int *vetor_
   if (!configs || !matrix || !vetor_ativacao) return;
 
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    if (vetor_ativacao[i] != p) continue;
-
-    // Se diferente de intacta (= 1), mantém estado atual
-    if (matrix[i].ID_ESTADO != 1) continue;
-
-    // Se intacta (= 1) transicionar para contenção (= 4): 1 -> 4
-    matrix[i].ID_ESTADO = 4;
+    // Se intacta (= 1) e no instante de ativação (vet_ativ[i] = p) 
+    //  transicionar para contenção (= 4): 1 -> 4
+    if (vetor_ativacao[i] == p && matrix[i].ID_ESTADO == 1) matrix[i].ID_ESTADO = 4;
   }
 }
 
@@ -868,7 +867,7 @@ bool check_in_matrix_boundaries(
  * 8.1: Sentido de propagação do vento
  * 
  */
-int calculate_potencial_ignicao(InputConfigs* configs, int idx_atual, Celula* matrix_atual) {
+int calculate_potencial_ignicao(InputConfigs* configs, int row, int col, Celula* matrix_atual) {
   // Vizinhos de Moore para matriz linear, sendo 
   //  - x a posição da célula corrente, dado por (x_i, x_j)
   //  - L: número de linhas na matriz
@@ -887,43 +886,31 @@ int calculate_potencial_ignicao(InputConfigs* configs, int idx_atual, Celula* ma
   //  c = (x_i - C + 1, x_j - L - 1)
   //  h = (x_i - C + 1, x_j - L + 1)
 
-  // Transformação para matrix linear: idx = x_i * C + x_j;
-  //  b = idx - C
-  //  g = idx + C
-  //  d = idx - 1
-  //  e = idx + 1
-  
-  //  a = idx - C - 1
-  //  f = idx - C + 1
-  //  c = idx + C - 1
-  //  h = idx + C + 1
+  // op linha: x_i - C + { 0,  0, -1, +1, -1, -1, +1, +1}
+  // op colun: x_j - L + {-1, +1,  0,  0, -1, +1, -1, +1}
+
+  int vet_linha[8] = { 0,  0, -1, 1, -1, -1, 1, 1};
+  int vet_coluna[8] = {-1, 1,  0,  0, -1, 1, -1, 1};
 
   // Casos de borda: vizinhos fora da matriz serão ignorados
   
   int C = configs->C;
 
-  int vizinhos_moore[8] = {
-    -C, C, -1, 1,         // vizinhos ortogonais
-    -C-1, -C+1, C-1, C+1  // vizinhos diagonais
-  };
-
-  int linha_celula = idx_atual / C;
-  int coluna_celula = idx_atual % C;
-
   // S = sum(𝑃𝑣)
   int S = 0;
   
   for (int i = 0; i < 8; i++) {
-    int idx_vizinho = idx_atual + vizinhos_moore[i];
-
-    int linha_vizinho = idx_vizinho / C;
-    int coluna_vizinho = idx_vizinho % C;
     
-    int prop_linha = linha_celula - linha_vizinho;
-    int prop_coluna = coluna_celula - coluna_vizinho;
+    int linha_vizinho = row + vet_linha[i];
+    int coluna_vizinho = col + vet_coluna[i];
+    
+    int prop_linha = row - linha_vizinho;
+    int prop_coluna = col - coluna_vizinho;
     
     // Caso fora dos limites, evitar calculo
     if (!check_in_matrix_boundaries(configs, linha_vizinho, coluna_vizinho)) continue;
+    
+    int idx_vizinho = linha_vizinho * C + coluna_vizinho;
     
     // Considerar apernas se vizinho em estado 'em chamas'
     if (matrix_atual[idx_vizinho].ID_ESTADO != 2) continue;
@@ -943,6 +930,8 @@ int calculate_potencial_ignicao(InputConfigs* configs, int idx_atual, Celula* ma
     S += peso_vizinho;
   }
 
+  unsigned long long idx_atual = row * C + col;
+
   // 𝐼 = floor(𝑆 × 𝑓𝑎𝑡𝑜𝑟_𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑙 × (100 − 𝑢𝑚𝑖𝑑𝑎𝑑𝑒) / 100)
   return (S * matrix_atual[idx_atual].FATOR_INCENDIO * (100 - matrix_atual[idx_atual].UMIDADE)) / 100 ;
 }
@@ -960,45 +949,49 @@ int calculate_potencial_ignicao(InputConfigs* configs, int idx_atual, Celula* ma
  * 8. Cálculo do potencial de ignição
  */
 void update_matrix(InputConfigs* configs, Celula* matrix_atual, Celula* matrix_proximo) {
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    matrix_proximo[i].ID_ESTADO = matrix_atual[i].ID_ESTADO;
-    // Célula que permanecem
-    // - não combustível (= 0)
-    // - queimada (= 3)
-    // - contenção (= 4)
-    if (
-      matrix_atual[i].ID_ESTADO == 0 ||
-      matrix_atual[i].ID_ESTADO == 3 ||
-      matrix_atual[i].ID_ESTADO == 4
-    ) {
-      continue;
-    }
+  for (int i = 0; i < configs->L; i++) {
+    for (int j = 0; j < configs->C; j++) {
+      int idx = i * configs->C + j;
+      matrix_proximo[idx].ID_ESTADO = matrix_atual[idx].ID_ESTADO;
 
-    // Se célula em chamas (= 2)
-    if (matrix_atual[i].ID_ESTADO == 2) {
-      // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
-      if (matrix_proximo[i].TEMPO_QUEIMA == 0) {
-        matrix_proximo[i].ID_ESTADO = 3;
+      // Célula que permanecem
+      // - não combustível (= 0)
+      // - queimada (= 3)
+      // - contenção (= 4)
+      if (
+        matrix_atual[idx].ID_ESTADO == 0 ||
+        matrix_atual[idx].ID_ESTADO == 3 ||
+        matrix_atual[idx].ID_ESTADO == 4
+      ) {
         continue;
       }
 
-      matrix_proximo[i].TEMPO_QUEIMA--;
-      continue;
+      // Se célula em chamas (= 2)
+      if (matrix_atual[idx].ID_ESTADO == 2) {
+        // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
+        if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
+          matrix_proximo[idx].ID_ESTADO = 3;
+          continue;
+        }
+
+        matrix_proximo[idx].TEMPO_QUEIMA--;
+        continue;
+      }
+
+      // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
+      int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
+
+      // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
+      if (potencial_ignicao < configs->LIMIAR) continue;
+      
+      // Caso contrário, transitar para em chamas (= 2)
+      matrix_proximo[idx].ID_ESTADO = 2;
+      
+      // Atualizar tempo de queima
+      // Se vegetação rasteira (= 2), tempo de quima = 2
+      // Se floresta (= 3), tempo de queima = 4
+      matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
     }
-
-    // Caso contrário: Célula intacta (= 1), calcular potencial de ignicao
-    int potencial_ignicao = calculate_potencial_ignicao(configs, i, matrix_atual);
-
-    // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
-    if (potencial_ignicao < configs->LIMIAR) continue;
-    
-    // Caso contrário, transitar para em chamas (= 2)
-    matrix_proximo[i].ID_ESTADO = 2;
-    
-    // Atualizar tempo de queima
-    // Se vegetação rasteira (= 2), tempo de quima = 2
-    // Se floresta (= 3), tempo de queima = 4
-    matrix_proximo[i].TEMPO_QUEIMA = matrix_atual[i].ID_COBERTURA == 2 ? 2 : 4;
   }
 }
 
@@ -1040,40 +1033,52 @@ void print_metrics(Metrics item_vetor_tempo) {
  * 10.3: Percentual protegido
  */
 void calculate_metrics_resultados(
-  int p,
   InputConfigs* configs,
-  Metrics* vetor_tempo_atual,
+  Metrics* vetor_item_tempo_atual,
   Celula* matrix_atual,
   Celula* matrix_proximo
 ) {
-  vetor_tempo_atual[p].PASSO = p;
-  int combustiveis_iniciais = 0;
+
+  int combustiveis = 0;
+  int nao_combustiveis = 0;
+  int intactas = 0;
+  int total_ignicoes = 0;
+  int em_chamas = 0;
+  int queimadas = 0;
+  int contencao = 0;
   
   for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis_iniciais++;
+    if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
     
     switch (matrix_atual[i].ID_ESTADO) {
       case 0:
-        vetor_tempo_atual[p].NAO_COMBUSTIVEIS += 1;
+        nao_combustiveis++;
         break;
       case 1:
-        vetor_tempo_atual[p].INTACTAS += 1;
-        if (matrix_proximo[i].ID_ESTADO == 2) vetor_tempo_atual[p].TOTAL_IGNICOES++;
+        intactas++;
+        if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
         break;
       case 2:
-        vetor_tempo_atual[p].EM_CHAMAS += 1;
+        em_chamas++;
         break;
       case 3:
-        vetor_tempo_atual[p].QUEIMADAS += 1;
+        queimadas++;
         break;
       case 4:
-        vetor_tempo_atual[p].CONTENCAO += 1;
+        contencao++;
         break;
       default:
         break;
     }
-  }
-  vetor_tempo_atual[p].COMBUSTIVEIS = combustiveis_iniciais;
+  }  
+
+  vetor_item_tempo_atual->COMBUSTIVEIS = combustiveis;
+  vetor_item_tempo_atual->NAO_COMBUSTIVEIS = nao_combustiveis;
+  vetor_item_tempo_atual->INTACTAS = intactas;
+  vetor_item_tempo_atual->EM_CHAMAS = em_chamas;
+  vetor_item_tempo_atual->QUEIMADAS = queimadas;
+  vetor_item_tempo_atual->CONTENCAO = contencao;
+  vetor_item_tempo_atual->TOTAL_IGNICOES = total_ignicoes;
 }
 
 float calculate_percentual_queimado(int passo, Metrics* vetor_tempo) {
@@ -1144,21 +1149,28 @@ int run_simulation(
    */
   // print_metrics_csv_header();
 
+  // Ponteiro fixo. Evitar necessidade de pointeiro temporário
+  //  para realizar swap
+  Celula* matrices[2] = {matrix_estado_atual, matrix_proximo_estado};
+
   int p = 0;
   do {
     // Para cada passo p da simulação
+    Celula* matrix_atual = matrices[p & 1];
+    Celula* matrix_proximo = matrices[(p+1) & 1];
 
     // Armazenar tempo de execução
     vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+    vetor_tempo_atual[p].PASSO = p;
     
     // 1. Ativar as zonas programadas para p
-    activate_zonas_contencao(configs, matrix_estado_atual, vetor_ativacao, p);
+    activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
     
     // 2. Calcular o próximo estado de todas as células
-    update_matrix(configs, matrix_estado_atual, matrix_proximo_estado);
+    update_matrix(configs, matrix_atual, matrix_proximo);
     
     // 3. Calcular estatísticas do próximo estado
-    calculate_metrics_resultados(p, configs, vetor_tempo_atual, matrix_estado_atual, matrix_proximo_estado);
+    calculate_metrics_resultados(configs, &vetor_tempo_atual[p], matrix_atual, matrix_proximo);
     
     /**
      * ========================================
@@ -1178,11 +1190,6 @@ int run_simulation(
      */
     // printf("%d %d %d", configs->L, configs->C, p);
     // print_state_matrix(configs, matrix_estado_atual, 0);
-
-    // 4. Trocar as matrizes
-    Celula* matrix_tmp = matrix_estado_atual;
-    matrix_estado_atual = matrix_proximo_estado;
-    matrix_proximo_estado = matrix_tmp; 
 
     p++;
     // 5. Verificar condição de parada
@@ -1206,8 +1213,9 @@ unsigned long long calculate_checksum(InputConfigs* configs, Celula* matrix_esta
 }
 
 
-void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual, Metrics *vetor_tempo_atual, Metrics *vetor_proximo_tempo, int *vetor_ativacao) {
+void cleanup_simulation_setup(InputConfigs *configs, Celula *matrix_estado_atual, Celula *matrix_proximo_estado, Metrics *vetor_tempo_atual, Metrics *vetor_proximo_tempo, int *vetor_ativacao) {
   free_simulation_matrix(configs, matrix_estado_atual);
+  free_simulation_matrix(configs, matrix_proximo_estado);
   free_metrics_vector(vetor_tempo_atual);
   free_metrics_vector(vetor_proximo_tempo);
   free_mapa_contencao_vector(vetor_ativacao);
@@ -1260,18 +1268,23 @@ int main(int argc, char* argv[]) {
   if (!matrix_estado_atual || !vetor_tempo_atual || !vetor_proximo_tempo || !vetor_ativacao) {
     perror("Falha ao alocar memória para matriz");
 
-    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
   if (!populate_matrix(configs, matrix_estado_atual)) {
     perror("Falha ao popular matriz.\n");
 
-    cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
     return EXIT_FAILURE;
   }
 
   Celula *matrix_proximo_estado = copy_matrix(configs, matrix_estado_atual);
+  if (!matrix_proximo_estado) {
+    perror("Falha ao copiar matriz.\n");
+    cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+    return EXIT_FAILURE;
+  }
 
   apply_focos_iniciais_incendio(configs, matrix_estado_atual);
   apply_focos_iniciais_incendio(configs, matrix_proximo_estado);
@@ -1282,7 +1295,6 @@ int main(int argc, char* argv[]) {
   print_final_report(passo_final, checksum, vetor_tempo_atual);
 
 
-  cleanup_simulation_setup(configs, matrix_estado_atual, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
-  free_simulation_matrix(configs, matrix_proximo_estado);
+  cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
   return EXIT_SUCCESS;
 }
