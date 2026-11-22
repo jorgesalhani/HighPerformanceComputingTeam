@@ -1,7 +1,11 @@
+// Modificações com suporte para execução MPI/OMP
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
+#include <mpi.h>
+#include <string.h>
 
 /**
  * Definições de foco de incêndio
@@ -679,19 +683,87 @@ bool populate_matrix(InputConfigs* configs, Celula *matrix) {
   return true;
 }
 
-Celula *copy_matrix(InputConfigs* configs, Celula *matrix) {
-  if (!configs || !matrix) return false;
-  Celula *cp_matrix = build_linear_state_matrix(configs);
+/**
+ * 8. Cálculo do potencial de ignição
+ * 
+ * 8.1: Sentido de propagação do vento
+ * 
+ */
+int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, int col, const Celula* restrict matrix_atual) {
+  // Vizinhos de Moore para matriz linear, sendo 
+  //  - x a posição da célula corrente, dado por (x_i, x_j)
+  //  - L: número de linhas na matriz
+  //  - C: número de colunas na matriz
+  //      a b c
+  //      d X e
+  //      f g h
+  // 
+  //  b = (x_i - C,     x_j - L - 1)
+  //  g = (x_i - C,     x_j - L + 1)
+  //  d = (x_i - C - 1, x_j - L)
+  //  e = (x_i - C + 1, x_j - L)
+  
+  //  a = (x_i - C - 1, x_j - L - 1)
+  //  f = (x_i - C - 1, x_j - L + 1)
+  //  c = (x_i - C + 1, x_j - L - 1)
+  //  h = (x_i - C + 1, x_j - L + 1)
 
-  for (unsigned long long i = 0; i < configs->L * configs->C; i++) {
-    cp_matrix[i].ID_COBERTURA = matrix[i].ID_COBERTURA;
-    cp_matrix[i].FATOR_INCENDIO = matrix[i].FATOR_INCENDIO;
-    cp_matrix[i].UMIDADE = matrix[i].UMIDADE;
-    cp_matrix[i].ID_ESTADO = matrix[i].ID_ESTADO;
-    cp_matrix[i].TEMPO_QUEIMA = matrix[i].TEMPO_QUEIMA;
+  // op linha: x_i - C + { 0,  0, -1, +1, -1, -1, +1, +1}
+  // op colun: x_j - L + {-1, +1,  0,  0, -1, +1, -1, +1}
+
+  static const int vet_linha[8] = { 0,  0, -1, 1, -1, -1, 1, 1};
+  static const int vet_coluna[8] = {-1, 1,  0,  0, -1, 1, -1, 1};
+
+  // Casos de borda: vizinhos fora da matriz serão ignorados
+
+  // Já calcular peso basico. prim4: ortogonais. last4: diagonais
+  // Casos peso_basico:
+  //  - Vizinho ortogonal: 10
+  //  - Vizinho diagonal: 7
+  static const int peso_basico[8] = {10, 10, 10, 10, 7, 7, 7, 7};
+
+  
+  int C = configs->C;
+  const int V_LINHA = configs->VENTO_LINHA;
+  const int V_COLUNA = configs->VENTO_COLUNA;
+  const int V_INTENS = configs->V;
+
+  // S = sum(𝑃𝑣)
+  int S = 0;
+  
+  for (int i = 0; i < 8; i++) { 
+    const int linha_vizinho = row + vet_linha[i];
+    const int coluna_vizinho = col + vet_coluna[i];
+    
+    const int prop_linha = row - linha_vizinho;
+    const int prop_coluna = col - coluna_vizinho;
+    
+    // Caso fora dos limites
+    // evitar chamada de função
+    if (
+      (linha_vizinho >= 0 && linha_vizinho < configs->L) &&
+      (coluna_vizinho >= 0 && coluna_vizinho < configs->C)
+    ) {
+      const int idx_vizinho = linha_vizinho * C + coluna_vizinho;
+      
+      // Considerar apernas se vizinho em estado 'em chamas'
+      if (matrix_atual[idx_vizinho].ID_ESTADO == 2) {
+  
+        // 𝐴 = 𝑝𝑟𝑜𝑝_𝑙𝑖𝑛ℎ𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑙𝑖𝑛ℎ𝑎 + 𝑝𝑟𝑜𝑝_𝑐𝑜𝑙𝑢𝑛𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑐𝑜𝑙𝑢𝑛a
+        const int A = prop_linha*V_LINHA + prop_coluna*V_COLUNA;
+  
+        // 𝑃𝑣 = max(1, 𝑃básico + 𝑖𝑛𝑡𝑒𝑛𝑠𝑖𝑑𝑎𝑑𝑒 × 𝐴)
+        const int peso_calculado_int_a = peso_basico[i] + (V_INTENS * A);
+  
+        S += peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
+      }
+    }
   }
 
-  return cp_matrix;
+  const unsigned long long idx_atual = row * C + col;
+
+  // 𝐼 = floor(𝑆 × 𝑓𝑎𝑡𝑜𝑟_𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑙 × (100 − 𝑢𝑚𝑖𝑑𝑎𝑑𝑒) / 100)
+  return (S * matrix_atual[idx_atual].FATOR_INCENDIO * (100 - matrix_atual[idx_atual].UMIDADE)) / 100 ;
 }
 
 void print_state_matrix(InputConfigs* configs, Celula* matrix, int metric) {
@@ -834,262 +906,17 @@ int *build_mapa_contencao(InputConfigs* configs, Celula* matrix) {
     return ativacao;
 }
 
-/**
- * 7. Funcionamento da simulação
- * 
- * 7.2: Ativação de zonas de contenção
- *  - Mudança de estado: Se instante p, intacta -> Contenção
- */
-void activate_zonas_contencao(const InputConfigs* restrict configs, Celula* restrict matrix, int *vetor_ativacao, int p) {
-  if (!configs || !matrix || !vetor_ativacao) return;
-
-  const unsigned long long TOTAL_CELLS = configs->L * configs->C;
-
-  #pragma omp for simd schedule(static)
-  for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
-    // Se intacta (= 1) e no instante de ativação (vet_ativ[i] = p) 
-    //  transicionar para contenção (= 4): 1 -> 4
-    if (vetor_ativacao[i] == p && matrix[i].ID_ESTADO == 1) matrix[i].ID_ESTADO = 4;
-  }
-}
-
-bool check_in_matrix_boundaries(
-  const InputConfigs* restrict configs,
-  int neighbor_row,
-  int neighbor_col
-) {
-  return (
-    (neighbor_row >= 0 && neighbor_row < configs->L) &&
-    (neighbor_col >= 0 && neighbor_col < configs->C)
-  );
-}
-
-/**
- * 8. Cálculo do potencial de ignição
- * 
- * 8.1: Sentido de propagação do vento
- * 
- */
-int calculate_potencial_ignicao(const InputConfigs* restrict configs, int row, int col, const Celula* restrict matrix_atual) {
-  // Vizinhos de Moore para matriz linear, sendo 
-  //  - x a posição da célula corrente, dado por (x_i, x_j)
-  //  - L: número de linhas na matriz
-  //  - C: número de colunas na matriz
-  //      a b c
-  //      d X e
-  //      f g h
-  // 
-  //  b = (x_i - C,     x_j - L - 1)
-  //  g = (x_i - C,     x_j - L + 1)
-  //  d = (x_i - C - 1, x_j - L)
-  //  e = (x_i - C + 1, x_j - L)
-  
-  //  a = (x_i - C - 1, x_j - L - 1)
-  //  f = (x_i - C - 1, x_j - L + 1)
-  //  c = (x_i - C + 1, x_j - L - 1)
-  //  h = (x_i - C + 1, x_j - L + 1)
-
-  // op linha: x_i - C + { 0,  0, -1, +1, -1, -1, +1, +1}
-  // op colun: x_j - L + {-1, +1,  0,  0, -1, +1, -1, +1}
-
-  static const int vet_linha[8] = { 0,  0, -1, 1, -1, -1, 1, 1};
-  static const int vet_coluna[8] = {-1, 1,  0,  0, -1, 1, -1, 1};
-
-  // Casos de borda: vizinhos fora da matriz serão ignorados
-
-  // Já calcular peso basico. prim4: ortogonais. last4: diagonais
-  // Casos peso_basico:
-  //  - Vizinho ortogonal: 10
-  //  - Vizinho diagonal: 7
-  static const int peso_basico[8] = {10, 10, 10, 10, 7, 7, 7, 7};
-
-  
-  int C = configs->C;
-  const int V_LINHA = configs->VENTO_LINHA;
-  const int V_COLUNA = configs->VENTO_COLUNA;
-  const int V_INTENS = configs->V;
-
-  // S = sum(𝑃𝑣)
-  int S = 0;
-  
-  for (int i = 0; i < 8; i++) { 
-    const int linha_vizinho = row + vet_linha[i];
-    const int coluna_vizinho = col + vet_coluna[i];
-    
-    const int prop_linha = row - linha_vizinho;
-    const int prop_coluna = col - coluna_vizinho;
-    
-    // Caso fora dos limites
-    // evitar chamada de função
-    if (
-      (linha_vizinho >= 0 && linha_vizinho < configs->L) &&
-      (coluna_vizinho >= 0 && coluna_vizinho < configs->C)
-    ) {
-      const int idx_vizinho = linha_vizinho * C + coluna_vizinho;
-      
-      // Considerar apernas se vizinho em estado 'em chamas'
-      if (matrix_atual[idx_vizinho].ID_ESTADO == 2) {
-  
-        // 𝐴 = 𝑝𝑟𝑜𝑝_𝑙𝑖𝑛ℎ𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑙𝑖𝑛ℎ𝑎 + 𝑝𝑟𝑜𝑝_𝑐𝑜𝑙𝑢𝑛𝑎 × 𝑣𝑒𝑛𝑡𝑜_𝑐𝑜𝑙𝑢𝑛a
-        const int A = prop_linha*V_LINHA + prop_coluna*V_COLUNA;
-  
-        // 𝑃𝑣 = max(1, 𝑃básico + 𝑖𝑛𝑡𝑒𝑛𝑠𝑖𝑑𝑎𝑑𝑒 × 𝐴)
-        const int peso_calculado_int_a = peso_basico[i] + (V_INTENS * A);
-  
-        S += peso_calculado_int_a > 1 ? peso_calculado_int_a : 1;
-      }
-    }
-  }
-
-  const unsigned long long idx_atual = row * C + col;
-
-  // 𝐼 = floor(𝑆 × 𝑓𝑎𝑡𝑜𝑟_𝑐𝑜𝑚𝑏𝑢𝑠𝑡𝚤𝑣𝑒𝑙 × (100 − 𝑢𝑚𝑖𝑑𝑎𝑑𝑒) / 100)
-  return (S * matrix_atual[idx_atual].FATOR_INCENDIO * (100 - matrix_atual[idx_atual].UMIDADE)) / 100 ;
-}
-
-/**
- * 7. Funcionamento da simulação
- * 
- * 7.3: Atualização das células
- *  - célula combustível:   permanece não combustível
- *  - célula intacta:       calcular potencial de ignição se potencia > LIMIAR, entrará em chamas 
- *  - célula em chamas:     tempo de queima - 1 se noto tempo = 0, mudança para estado queimada
- *  - célula queimada:      permanece queimada
- *  - célula contenção:     permanece em contenção
- * 
- * 8. Cálculo do potencial de ignição
- */
-void update_matrix(
-  const InputConfigs* restrict configs, 
-  const Celula* restrict matrix_atual, 
-  Celula* restrict matrix_proximo
-) {
-
-  const int C = configs->C;
-  const int L = configs->L;
-  const int LIMIAR = configs->LIMIAR;
-
-  #pragma omp for simd collapse(2) schedule(static)
-  for (int i = 0; i < L; i++) {
-    for (int j = 0; j < C; j++) {
-      int idx = i * C + j;
-      matrix_proximo[idx].ID_ESTADO = matrix_atual[idx].ID_ESTADO;
-
-      // Se célula em chamas (= 2)
-      if (matrix_atual[idx].ID_ESTADO == 2) {
-        // Se tempo_queima = 0, transitar de em chamas para queimada (2 -> 3)
-        if (matrix_proximo[idx].TEMPO_QUEIMA == 0) {
-          matrix_proximo[idx].ID_ESTADO = 3;
-        } else {
-          matrix_proximo[idx].TEMPO_QUEIMA--;
-        }
-      } else 
-      // Caso célula intacta (= 1), calcular potencial de ignicao
-      if (matrix_atual[idx].ID_ESTADO == 1) {
-        const int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
-
-        // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
-        if (potencial_ignicao >= LIMIAR) {
-          // Caso contrário, transitar para em chamas (= 2)
-          matrix_proximo[idx].ID_ESTADO = 2;
-          
-          // Atualizar tempo de queima
-          // Se vegetação rasteira (= 2), tempo de quima = 2
-          // Se floresta (= 3), tempo de queima = 4
-          matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
-        };
-      }
-
-      // Célula que permanecem
-      // - não combustível (= 0)
-      // - queimada (= 3)
-      // - contenção (= 4)
-    }
-  }
-}
-
-/**
- * 9. Condição de parada
- *  - Após P passos: p > P
- *  - Na ausência de células em chamas
- */
-bool check_stop_condition(InputConfigs* configs, Metrics item_vetor_tempo) {
-  return item_vetor_tempo.EM_CHAMAS != 0 && item_vetor_tempo.PASSO < configs->P;
-}
-
-void print_metrics_csv_header() {
-  printf("PASSO,COMBUSTIVEIS,NAO_COMBUSTIVEIS,INTACTAS,EM_CHAMAS,QUEIMADAS,CONTENCAO,TOTAL_IGNICOES\n");
-}
-
 void print_metrics(Metrics item_vetor_tempo) {
   printf("%d,%d,%d,%d,%d,%d,%d,%d\n", 
-      item_vetor_tempo.PASSO,
-      item_vetor_tempo.COMBUSTIVEIS,
-      item_vetor_tempo.NAO_COMBUSTIVEIS,
-      item_vetor_tempo.INTACTAS,
-      item_vetor_tempo.EM_CHAMAS,
-      item_vetor_tempo.QUEIMADAS,
-      item_vetor_tempo.CONTENCAO,
-      item_vetor_tempo.TOTAL_IGNICOES
-    );
-}
-
-/**
- * 10. Calculo dos resultados
- * 
- * 10.1: Total de ignições
- *  - incluso total de estados por tempo
- *    importante para pico de ignições e outras análises
- * 
- * 10.2: Percentual queimado
- * 
- * 10.3: Percentual protegido
- */
-void calculate_metrics_resultados(
-  const InputConfigs* restrict configs,
-  Metrics* restrict vetor_item_tempo_atual,
-  const Celula* restrict matrix_atual,
-  const Celula* restrict matrix_proximo
-) {
-
-  int combustiveis = 0;
-  int nao_combustiveis = 0;
-  int intactas = 0;
-  int total_ignicoes = 0;
-  int em_chamas = 0;
-  int queimadas = 0;
-  int contencao = 0;
-
-  const unsigned long long TOTAL_CELLS = configs->L * configs->C;
-  
-  // #pragma omp for simd reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
-  for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
-    if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
-
-    if (matrix_atual[i].ID_ESTADO == 0) {
-      nao_combustiveis++;
-    } else 
-    if (matrix_atual[i].ID_ESTADO == 1) {
-      intactas++;
-      if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
-    } else 
-    if (matrix_atual[i].ID_ESTADO == 2) {
-      em_chamas++;
-    } else 
-    if (matrix_atual[i].ID_ESTADO == 3) {
-      queimadas++;
-    } else {
-      contencao++;
-    }
-  }  
-
-  vetor_item_tempo_atual->COMBUSTIVEIS = combustiveis;
-  vetor_item_tempo_atual->NAO_COMBUSTIVEIS = nao_combustiveis;
-  vetor_item_tempo_atual->INTACTAS = intactas;
-  vetor_item_tempo_atual->EM_CHAMAS = em_chamas;
-  vetor_item_tempo_atual->QUEIMADAS = queimadas;
-  vetor_item_tempo_atual->CONTENCAO = contencao;
-  vetor_item_tempo_atual->TOTAL_IGNICOES = total_ignicoes;
+    item_vetor_tempo.PASSO,
+    item_vetor_tempo.COMBUSTIVEIS,
+    item_vetor_tempo.NAO_COMBUSTIVEIS,
+    item_vetor_tempo.INTACTAS,
+    item_vetor_tempo.EM_CHAMAS,
+    item_vetor_tempo.QUEIMADAS,
+    item_vetor_tempo.CONTENCAO,
+    item_vetor_tempo.TOTAL_IGNICOES
+  );
 }
 
 float calculate_percentual_queimado(int passo, Metrics* vetor_tempo) {
@@ -1122,6 +949,156 @@ int calculate_max_ignicoes(int passo, Metrics* vetor_tempo, int* passo_max_ign) 
   return max_ignicoes;
 }
 
+static inline void exchange_halo_rows(
+  Celula *matrix_atual,
+  int local_rows,
+  int C,
+  int pos_vizinhanca_top,
+  int pos_vizinhanca_bottom
+) {
+  const int row_bytes = C * (int)sizeof(Celula);
+
+  MPI_Sendrecv(
+    &matrix_atual[1 * C], row_bytes, MPI_BYTE, pos_vizinhanca_top, 0,
+    &matrix_atual[(local_rows + 1) * C], row_bytes, MPI_BYTE, pos_vizinhanca_bottom, 0,
+    MPI_COMM_WORLD, MPI_STATUS_IGNORE
+  );
+
+  MPI_Sendrecv(
+    &matrix_atual[local_rows * C], row_bytes, MPI_BYTE, pos_vizinhanca_bottom, 1,
+    &matrix_atual[0], row_bytes, MPI_BYTE, pos_vizinhanca_top, 1,
+    MPI_COMM_WORLD, MPI_STATUS_IGNORE
+  );
+}
+
+static inline void reduce_global_metrics(const int local_metrics[7], int global_metrics[7]) {
+  MPI_Allreduce(local_metrics, global_metrics, 7, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+}
+
+bool broadcast_input_validity(InputConfigs** configs_ptr, int rank) {
+  bool is_valid = true;
+
+  if (rank == 0) {
+    if (!(*configs_ptr)) is_valid = false;
+  } else {
+    *configs_ptr = (InputConfigs*) malloc(sizeof(InputConfigs));
+    if (!(*configs_ptr)) is_valid = false;
+  }
+
+  MPI_Bcast(&is_valid, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+  if (!is_valid) {
+    if (rank != 0) {
+      free(*configs_ptr);
+      *configs_ptr = NULL;
+    }
+    return is_valid;
+  }
+
+  return is_valid;
+}
+
+bool broadcast_vetor_focos_incendio(InputConfigs* configs, int rank) {
+  // Broadcast vetores
+  // - focos de incendio
+  if (configs->F > 0) {
+    int* focos_int_linear = (int*) malloc((size_t)configs->F * 2 * sizeof(int));
+    if (!focos_int_linear) {
+      if (rank != 0) free_input_configs(configs);
+      return false;
+    }
+
+    if (rank == 0) {
+      for (int i = 0; i < configs->F; i++) {
+        focos_int_linear[i * 2 + 0] = configs->FOCOS_INCENDIO[i]->L;
+        focos_int_linear[i * 2 + 1] = configs->FOCOS_INCENDIO[i]->C;
+      }
+    }
+
+    MPI_Bcast(focos_int_linear, configs->F * 2, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (rank != 0) {
+      configs->FOCOS_INCENDIO = (FocoIncendio**) malloc((size_t)configs->F * sizeof(FocoIncendio*));
+      for (int i = 0; i < configs->F; i++) {
+        configs->FOCOS_INCENDIO[i] = (FocoIncendio*) malloc(sizeof(FocoIncendio));
+        configs->FOCOS_INCENDIO[i]->L = focos_int_linear[i * 2 + 0];
+        configs->FOCOS_INCENDIO[i]->C = focos_int_linear[i * 2 + 1];
+      }
+    }
+
+    free(focos_int_linear);
+  }
+
+  return true;
+}
+
+bool broadcast_vetor_zonas_contencao(InputConfigs* configs, int rank) {
+  if (configs->Z > 0) {
+    int* zonas_int_linear = (int*) malloc((size_t)configs->Z * 5 * sizeof(int));
+    if (!zonas_int_linear) {
+      if (rank != 0) free_input_configs(configs);
+      return false;
+    }
+
+    if (rank == 0) {
+      for (int i = 0; i < configs->Z; i++) {
+        zonas_int_linear[i * 5 + 0] = configs->ZONAS_CONTENCAO[i]->PASSO_ATIVACAO;
+        zonas_int_linear[i * 5 + 1] = configs->ZONAS_CONTENCAO[i]->LI;
+        zonas_int_linear[i * 5 + 2] = configs->ZONAS_CONTENCAO[i]->CI;
+        zonas_int_linear[i * 5 + 3] = configs->ZONAS_CONTENCAO[i]->LF;
+        zonas_int_linear[i * 5 + 4] = configs->ZONAS_CONTENCAO[i]->CF;
+      }
+    }
+
+    MPI_Bcast(zonas_int_linear, configs->Z * 5, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (rank != 0) {
+      configs->ZONAS_CONTENCAO = (ZonaContencao**) malloc((size_t)configs->Z * sizeof(ZonaContencao*));
+      for (int i = 0; i < configs->Z; i++) {
+        configs->ZONAS_CONTENCAO[i] = (ZonaContencao*) malloc(sizeof(ZonaContencao));
+        configs->ZONAS_CONTENCAO[i]->PASSO_ATIVACAO = zonas_int_linear[i * 5 + 0];
+        configs->ZONAS_CONTENCAO[i]->LI = zonas_int_linear[i * 5 + 1];
+        configs->ZONAS_CONTENCAO[i]->CI = zonas_int_linear[i * 5 + 2];
+        configs->ZONAS_CONTENCAO[i]->LF = zonas_int_linear[i * 5 + 3];
+        configs->ZONAS_CONTENCAO[i]->CF = zonas_int_linear[i * 5 + 4];
+      }
+    }
+
+    free(zonas_int_linear);
+  }
+
+  return true;
+}
+
+/**
+ * Broadcast de configurações de entrada
+ * - Pós validação pela master (rank 0)
+ */
+bool broadcast_input_configs(InputConfigs** configs_ptr, int rank) {
+  bool bcast_validity_success = broadcast_input_validity(configs_ptr, rank);
+  if (!bcast_validity_success) return bcast_validity_success;
+
+  InputConfigs* configs = *configs_ptr;
+
+  // Brodcast valores na raiz de configs (ints)
+  MPI_Bcast(configs, sizeof(InputConfigs), MPI_BYTE, 0, MPI_COMM_WORLD);
+
+  if (rank != 0) {
+    configs->FOCOS_INCENDIO = NULL;
+    configs->ZONAS_CONTENCAO = NULL;
+  }
+
+  // Broadcast valores em vetores
+  // - focos de incendio | zonas de contencao
+
+  // Broadcst focos de incendio
+  bool bcast_focos_success = broadcast_vetor_focos_incendio(configs, rank);
+
+  // Broadcast zonas contencao
+  bool bcast_zonas_success = broadcast_vetor_zonas_contencao(configs, rank);
+
+  return bcast_focos_success && bcast_zonas_success;
+}
+
 /**
  * 7. Funcionamento da simulação
  * 
@@ -1149,25 +1126,25 @@ int run_simulation(
   Celula *matrix_proximo_estado,
   int *vetor_ativacao,
   Metrics *vetor_tempo_atual,
-  Metrics *vetor_proximo_tempo
+  Metrics *vetor_proximo_tempo,
+  int local_rows,
+  int rank,
+  int size
 ) {
-    /**
-   * ========================================
-   * PRINT DATA - csv header
-   * Relevante para visualização: 
-   *  - time_series
-   * ========================================
-   */
-  // print_metrics_csv_header();
-
-  // Ponteiro fixo. Evitar necessidade de pointeiro temporário
-  //  para realizar swap
   Celula* const matrices[2] = {matrix_estado_atual, matrix_proximo_estado};
 
   int p = 0;
   bool manter_simulacao = true;
   const int P_TOTAL = configs->P;
-  const unsigned long long TOTAL_CELLS = (unsigned long long) configs->L * configs->C;
+
+  const int C = configs->C;
+  const int LIMIAR = configs->LIMIAR;
+
+  const unsigned long long START_IDX = (unsigned long long) C;
+  const unsigned long long END_IDX   = (unsigned long long) (local_rows + 1) * C;
+
+  const int pos_vizinhanca_top    = (rank > 0) ? (rank - 1) : MPI_PROC_NULL;
+  const int pos_vizinhanca_bottom = (rank < size - 1) ? (rank + 1) : MPI_PROC_NULL;
 
   int combustiveis = 0;
   int nao_combustiveis = 0;
@@ -1176,22 +1153,34 @@ int run_simulation(
   int em_chamas = 0;
   int queimadas = 0;
   int contencao = 0;
-  
-  #pragma omp parallel num_threads(configs->T) default(none) \
-    shared(matrices, configs, vetor_ativacao, vetor_tempo_atual, \
-           p, manter_simulacao, P_TOTAL, TOTAL_CELLS, \
-           combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
+
+  // pulo de 7 posicoes de int
+  // -- uma por metrica
+  int local_metrics[7]  = {0};
+  int global_metrics[7] = {0};
+
+  #pragma omp parallel default(none) \
+      num_threads(configs->T) \
+      shared(matrices, configs, vetor_ativacao, vetor_tempo_atual, \
+        p, manter_simulacao, P_TOTAL, START_IDX, END_IDX, \
+        local_rows, C, LIMIAR, \
+        pos_vizinhanca_top, pos_vizinhanca_bottom, rank, \
+        combustiveis, nao_combustiveis, intactas, total_ignicoes, \
+        em_chamas, queimadas, contencao, local_metrics, global_metrics \
+      )
   {
     do {
-      // Para cada passo p da simulação
       Celula* const matrix_atual = matrices[p & 1];
-      Celula* const matrix_proximo = matrices[(p+1) & 1];
+      Celula* const matrix_proximo = matrices[(p + 1) & 1];
 
-      // Armazenar tempo de execução
+      // Tempo inicial. Set 0 para m[étricas]
       #pragma omp single
       {
-        vetor_tempo_atual[p].TEMPO = omp_get_wtime();
-        vetor_tempo_atual[p].PASSO = p;
+        if (rank == 0) {
+          vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+          vetor_tempo_atual[p].PASSO = p;
+        }
+
         combustiveis = 0;
         nao_combustiveis = 0;
         intactas = 0;
@@ -1200,76 +1189,131 @@ int run_simulation(
         queimadas = 0;
         contencao = 0;
       }
-    
-      // 1. Ativar as zonas programadas para p
-      activate_zonas_contencao(configs, matrix_atual, vetor_ativacao, p);
 
-      // 2. Calcular o próximo estado de todas as células
-      update_matrix(configs, matrix_atual, matrix_proximo);
-      
-      // 3. Calcular estatísticas do próximo estado
-      // calculate_metrics_resultados(configs, &vetor_tempo_atual[p], matrix_atual, matrix_proximo);
-    
-      #pragma omp for simd schedule(static) reduction(+: combustiveis, nao_combustiveis, intactas, total_ignicoes, em_chamas, queimadas, contencao)
-      for (unsigned long long i = 0; i < TOTAL_CELLS; i++) {
-        if (matrix_atual[i].ID_COBERTURA == 2 || matrix_atual[i].ID_COBERTURA == 3) combustiveis++;
-
-        if (matrix_atual[i].ID_ESTADO == 0) {
-          nao_combustiveis++;
-        } else 
-        if (matrix_atual[i].ID_ESTADO == 1) {
-          intactas++;
-          if (matrix_proximo[i].ID_ESTADO == 2) total_ignicoes++;
-        } else 
-        if (matrix_atual[i].ID_ESTADO == 2) {
-          em_chamas++;
-        } else 
-        if (matrix_atual[i].ID_ESTADO == 3) {
-          queimadas++;
-        } else {
-          contencao++;
+      // Ativação de zonas de contenção
+      // Remoção de função activate_zonas_contencao (presente no T1)
+      #pragma omp for simd schedule(static)
+      for (unsigned long long i = START_IDX; i < END_IDX; i++) {
+        if (vetor_ativacao[i] == p && matrix_atual[i].ID_ESTADO == 1) {
+          matrix_atual[i].ID_ESTADO = 4;
         }
-      }  
-      
-      /**
-       * ========================================
-       * PRINT DATA - csv data
-       * Relevante para visualização: 
-       *  - time_series
-       * ========================================
-       */
-      // print_metrics(vetor_tempo_atual[p]);
-      
-      /**
-       * ========================================
-       * PRINT DATA
-       * Relevante para visualização: 
-       *  - grid_states
-       * ========================================
-       */
-      // printf("%d %d %d", configs->L, configs->C, p);
-      // print_state_matrix(configs, matrix_estado_atual, 0);
+      }
 
-      // 5. Verificar condição de parada
-      
-      #pragma omp single
+      // Compartilhamento de células de borda (halo)
+      #pragma omp master
       {
-        vetor_tempo_atual[p].COMBUSTIVEIS = combustiveis;
-        vetor_tempo_atual[p].NAO_COMBUSTIVEIS = nao_combustiveis;
-        vetor_tempo_atual[p].INTACTAS = intactas;
-        vetor_tempo_atual[p].EM_CHAMAS = em_chamas;
-        vetor_tempo_atual[p].QUEIMADAS = queimadas;
-        vetor_tempo_atual[p].CONTENCAO = contencao;
-        vetor_tempo_atual[p].TOTAL_IGNICOES = total_ignicoes;
-        
-        // Evitar chamada de função
-        manter_simulacao = vetor_tempo_atual[p].EM_CHAMAS != 0 && vetor_tempo_atual[p].PASSO < P_TOTAL;
+        exchange_halo_rows(matrix_atual, local_rows, C, pos_vizinhanca_top, pos_vizinhanca_bottom);
+      }
+      #pragma omp barrier
+
+      // Remoção de função update_matrix (presente no T1)
+      #pragma omp for collapse(2) schedule(static)
+      for (int i = 1; i <= local_rows; i++) {
+        for (int j = 0; j < C; j++) {
+          const int idx = i * C + j;
+          const int estado_atual = matrix_atual[idx].ID_ESTADO;
+          matrix_proximo[idx].ID_ESTADO = estado_atual;
+
+          if (estado_atual == 2) {
+            const int tempo = matrix_proximo[idx].TEMPO_QUEIMA;
+            if (tempo == 0) {
+              matrix_proximo[idx].ID_ESTADO = 3;
+            } else {
+              matrix_proximo[idx].TEMPO_QUEIMA = tempo - 1;
+            }
+          } else 
+          if (estado_atual == 1) {
+            const int potencial_ignicao = calculate_potencial_ignicao(configs, i, j, matrix_atual);
+
+            // Se potencial_ignicao < LIMIAR, manter intacta (= 1)
+            if (potencial_ignicao >= LIMIAR) {
+              // Caso contrário, transitar para em chamas (= 2)
+              matrix_proximo[idx].ID_ESTADO = 2;
+              
+              // Atualizar tempo de queima
+              // Se vegetação rasteira (= 2), tempo de quima = 2
+              // Se floresta (= 3), tempo de queima = 4
+              matrix_proximo[idx].TEMPO_QUEIMA = matrix_atual[idx].ID_COBERTURA == 2 ? 2 : 4;
+            };
+          }
+        }
+      }
+
+      // 5. Local OpenMP metrics reduction over owned interior cells [START_IDX, END_IDX)
+      #pragma omp for simd schedule(static) reduction(+: \
+          combustiveis, \
+          nao_combustiveis, \
+          intactas, \
+          total_ignicoes, \
+          em_chamas, \
+          queimadas, \
+          contencao)
+      for (unsigned long long i = START_IDX; i < END_IDX; i++) {
+        const int cob = matrix_atual[i].ID_COBERTURA;
+        if (cob == 2 || cob == 3) {
+          combustiveis++;
+        }
+
+        const int estado = matrix_atual[i].ID_ESTADO;
+        switch (estado) {
+          case 0:
+            nao_combustiveis++;
+            break;
+          case 1:
+            intactas++;
+            if (matrix_proximo[i].ID_ESTADO == 2) {
+              total_ignicoes++;
+            }
+            break;
+          case 2:
+            em_chamas++;
+            break;
+          case 3:
+            queimadas++;
+            break;
+          case 4:
+            contencao++;
+            break;
+          default:
+            break;
+        }
+      }
+
+      // Calculo interno de metricas
+      // Remoção de função calculate_metrics_resultados (presente no T1)
+      #pragma omp master
+      {
+        local_metrics[0] = combustiveis;
+        local_metrics[1] = nao_combustiveis;
+        local_metrics[2] = intactas;
+        local_metrics[3] = total_ignicoes;
+        local_metrics[4] = em_chamas;
+        local_metrics[5] = queimadas;
+        local_metrics[6] = contencao;
+
+        reduce_global_metrics(local_metrics, global_metrics);
+
+        if (rank == 0) {
+          vetor_tempo_atual[p].COMBUSTIVEIS = global_metrics[0];
+          vetor_tempo_atual[p].NAO_COMBUSTIVEIS = global_metrics[1];
+          vetor_tempo_atual[p].INTACTAS = global_metrics[2];
+          vetor_tempo_atual[p].TOTAL_IGNICOES = global_metrics[3];
+          vetor_tempo_atual[p].EM_CHAMAS = global_metrics[4];
+          vetor_tempo_atual[p].QUEIMADAS = global_metrics[5];
+          vetor_tempo_atual[p].CONTENCAO = global_metrics[6];
+
+          vetor_tempo_atual[p].TEMPO = omp_get_wtime() - vetor_tempo_atual[p].TEMPO;
+        }
+
+        manter_simulacao = (global_metrics[4] != 0) && (p < P_TOTAL);
         p++;
       }
+      #pragma omp barrier
+
     } while (manter_simulacao);
   }
 
-  return p-1;
+  return p - 1;
 }
 
 /**
@@ -1314,62 +1358,284 @@ void print_final_report(int passo, unsigned long long checksum, Metrics *vetor_t
   printf("tempo: %.6f\n", vetor_tempo[passo].TEMPO - vetor_tempo[0].TEMPO);
 }
 
+/**
+ * Cálculo de faixas de execução
+ * - E.g.
+ *    C = 8 | L = 9
+ *    size = 4
+ * 
+ * tamanho_faixa_de_celulas_base = 9 / 4 = 2
+ * remaider = 1
+ * local_rows = 2 + 1
+ * 
+ * -------------- C/L _____             start | offset
+ * o x x x x x x x  |      rank = 0     0       23
+ * x x x x x x x x  | 
+ * x x x x x x x o  | _____                         <- mantém remainder junto com rank 0, tentando manter localidade espacial
+ * o x x x x x x x  |      rank = 1     24      39
+ * x x x x x x x o  | _____
+ * o x x x x x x x  |      rank = 2     40      55
+ * x x x x x x x o  | _____
+ * o x x x x x x x  |      rank = 3     60      71
+ * x x x x x x x x  | _____
+ * 
+ */
+void calculate_faixas_de_celulas(
+  InputConfigs* configs,
+  int size, int rank, int tamanho_faixa_de_celulas_base, int remainder,
+  int *sendv_posicao_celulas, int *offset_posicao_celulas, 
+  int *sendv_posicao_vet_ativacao, int *offset_posicao_vet_ativacao
+) {
+  const int C = configs->C;
+
+  int offset_rows = 0;
+  for (int r = 0; r < size; r++) {
+    int r_rows = r < remainder 
+      ? tamanho_faixa_de_celulas_base + 1 
+      : tamanho_faixa_de_celulas_base;
+
+    sendv_posicao_celulas[r] = r_rows * C * (int)sizeof(Celula);
+    offset_posicao_celulas[r] = offset_rows * C * (int)sizeof(Celula);
+    sendv_posicao_vet_ativacao[r] = r_rows * C;
+    offset_posicao_vet_ativacao[r] = offset_rows * C;
+    offset_rows += r_rows;
+  }
+}
+
+/**
+ * Transmissão de mensagem dos índices da matrix trabalhados por cada processo
+ */
+int mpi_run_simulation(InputConfigs* configs, int rank, int size) {
+  const int C = configs->C;
+  const int L = configs->L;
+  
+  // vetor de posicao das celulas
+  //  - necessario que offset considere tamanho do objeto Celula para deslocamento
+  int *sendv_posicao_celulas = NULL;
+  int *offset_posicao_celulas = NULL;
+
+  // vetor de posicao no vetor de ativaoca
+  //  - offset considera posicoes de int
+  int *sendv_posicao_vet_ativacao = NULL;
+  int *offset_posicao_vet_ativacao = NULL;
+
+  // Divisão inteira
+  // - total de celulas na faixa disponibilizada ao processo de rank r
+  const int tamanho_faixa_de_celulas_base = L / size;
+
+  // Resto
+  // - caso divisão inexata, aumento de 1 linha no tamanho da faixa
+  const int remainder  = L % size;
+  // - cada rank r ganha uma linha, enquanto resto existir
+  const int tamanho_faixa = rank < remainder 
+    ? tamanho_faixa_de_celulas_base + 1 
+    : tamanho_faixa_de_celulas_base;
+
+  // Alocação de vetores de posição e deslocamento apenas por rank 0
+  if (rank == 0) {
+    sendv_posicao_celulas = (int*) malloc(size * sizeof(int));
+    offset_posicao_celulas = (int*) malloc(size * sizeof(int));
+
+    sendv_posicao_vet_ativacao = (int*) malloc(size * sizeof(int));
+    offset_posicao_vet_ativacao = (int*) malloc(size * sizeof(int));
+
+    if (!sendv_posicao_celulas || !offset_posicao_celulas || !sendv_posicao_vet_ativacao || !offset_posicao_vet_ativacao) {
+      fprintf(stderr, "Falha ao alocar vetores de deslocamento.\n");
+      MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+
+    calculate_faixas_de_celulas(
+      configs, size, rank, tamanho_faixa_de_celulas_base, remainder,
+      sendv_posicao_celulas, offset_posicao_celulas, 
+      sendv_posicao_vet_ativacao, offset_posicao_vet_ativacao
+    );
+  }
+
+  // Matrizes e vetores globais
+  Celula  *global_matrix_atual = NULL;
+  int *global_vetor_ativacao = NULL;
+
+  Metrics *vetor_tempo_atual = NULL;
+  Metrics *vetor_proximo_tempo = NULL;
+  bool is_setup_ok = true;
+
+  // Apenas rank 0 constroi mapas e vetores
+  if (rank == 0) {
+    global_matrix_atual = build_linear_state_matrix(configs);
+    vetor_tempo_atual = build_metrics_vector(configs);
+    vetor_proximo_tempo = build_metrics_vector(configs);
+    global_vetor_ativacao = build_mapa_contencao(configs, global_matrix_atual);
+
+    if (!global_matrix_atual || !vetor_tempo_atual || !vetor_proximo_tempo || !global_vetor_ativacao) {
+      fprintf(stderr, "[Rank 0] Falha em alocar estruturas globais.\n");
+      is_setup_ok = false;
+    }
+
+    if (!populate_matrix(configs, global_matrix_atual)) {
+      fprintf(stderr, "[Rank 0] Falha em popular matriz global.\n");
+      is_setup_ok = false;
+    } else {
+      apply_focos_iniciais_incendio(configs, global_matrix_atual);
+    }
+  }
+
+  // Broadcast check setup
+  MPI_Bcast(&is_setup_ok, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+  
+  if (!is_setup_ok) {
+    // Rank 0 print
+    if (rank == 0) {
+      cleanup_simulation_setup(configs, global_matrix_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, global_vetor_ativacao);
+      free(sendv_posicao_celulas);
+      free(offset_posicao_celulas); 
+      free(sendv_posicao_vet_ativacao); 
+      free(offset_posicao_vet_ativacao);
+    } else {
+      // Todos processos limpam sua propria configuração de entrada
+      free_input_configs(configs);
+    }
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
+
+  // Vetores locais para scatter de dados
+
+  /**
+   * Faixa original: retangulo (tamanho_faixa x C)
+   * Faixa com halo: retangulo ((tamanho_faixa+2) x C)
+   */
+  const int tamanho_faixa_com_halo = (tamanho_faixa + 2) * C;
+
+  Celula *local_matrix_atual = (Celula*) calloc(tamanho_faixa_com_halo, sizeof(Celula));
+  Celula *local_matrix_proximo = (Celula*) calloc(tamanho_faixa_com_halo, sizeof(Celula));
+
+  int *local_vetor_ativacao = (int*) malloc(tamanho_faixa_com_halo * sizeof(int));
+
+  if (!local_matrix_atual || !local_matrix_proximo || !local_vetor_ativacao) {
+    fprintf(stderr, "[Rank %d] Falha em alocar memória da faixa local.\n", rank);
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+  }
+
+  // Scater de dados
+  // Índice C inicializa para todos processos, pulando primeira linha de halo 
+  MPI_Scatterv(
+      global_matrix_atual, sendv_posicao_celulas, offset_posicao_celulas, MPI_BYTE,
+      &local_matrix_atual[C], tamanho_faixa * C * (int)sizeof(Celula), MPI_BYTE,
+      0, MPI_COMM_WORLD
+  );
+
+  MPI_Scatterv(
+      global_vetor_ativacao, sendv_posicao_vet_ativacao, offset_posicao_vet_ativacao, MPI_INT,
+      &local_vetor_ativacao[C], tamanho_faixa * C, MPI_INT,
+      0, MPI_COMM_WORLD
+  );
+
+  // Remoção de função copy_matrix (presente no T1)
+  memcpy(local_matrix_proximo, local_matrix_atual, tamanho_faixa_com_halo * sizeof(Celula));
+
+  int passo_final = run_simulation(
+      configs,
+      local_matrix_atual,
+      local_matrix_proximo,
+      local_vetor_ativacao,
+      vetor_tempo_atual,
+      vetor_proximo_tempo,
+      tamanho_faixa,
+      rank,
+      size
+  );
+
+  // ponteiro para matriz de gatherv, com passo atual ou proximo passo
+  Celula *gatherv_matrix = (passo_final % 2 == 0) 
+    ? local_matrix_atual 
+    : local_matrix_proximo;
+
+  // Consolidação de celulas locais para gatherv_matrix
+  MPI_Gatherv(
+    &gatherv_matrix[C], tamanho_faixa * C * (int)sizeof(Celula), MPI_BYTE,
+    global_matrix_atual, sendv_posicao_celulas, offset_posicao_celulas, MPI_BYTE,
+    0, MPI_COMM_WORLD
+  );
+
+  // Apenas rank 0 calcula checksum e limpa simulação
+  if (rank == 0) {
+    unsigned long long checksum = calculate_checksum(configs, global_matrix_atual, vetor_tempo_atual);
+    print_final_report(passo_final, checksum, vetor_tempo_atual);
+
+    cleanup_simulation_setup(configs, global_matrix_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, global_vetor_ativacao);
+    free(sendv_posicao_celulas);
+    free(offset_posicao_celulas);
+    free(sendv_posicao_vet_ativacao);
+    free(offset_posicao_vet_ativacao);
+  } else {
+    // Todas limpam configurações locais alocadas
+    free_input_configs(configs);
+  }
+
+  // Liberar matrizes locais
+  free(local_matrix_atual);
+  free(local_matrix_proximo);
+  free(local_vetor_ativacao);
+
+  return EXIT_SUCCESS;
+}
+
 int main(int argc, char* argv[]) {
+
+  // Inicialização de execução com MPI
+  // ===========================
+  int provided = 0;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+
+  if (provided < MPI_THREAD_FUNNELED) {
+    fprintf(stderr, "Erro: MPI não suporta MPI_THREAD_FUNNELED.\n");
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    return EXIT_FAILURE;
+  }
+
+  int rank, size;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  // ===========================
+  
+  // A partir de agora, os fluxos precisam ser pensados entre
+  // rank == 0: main
+  // rank != 0: demais
+
   if (!is_valid_single_input_argument(argc)) {
-    perror("Entrada inválida. A execução do programa requer um argumento: ./program <input_configs_filename>\n");
+    // Apenas processo UID 0 (rank=0) imprime mensagem de erro
+    if (rank == 0) perror("Entrada inválida. A execução do programa requer um argumento: ./program <input_configs_filename>\n");
+
+    // Todas finalizam
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
+  
+  InputConfigs* configs = NULL;
+  
+  // Apenas rank 0 lê e valida configurações
+  if (rank == 0) {
+    // Processamento para rank 0
+    configs = load_input_configs(argv[1]);
+    if (!configs || !is_valid_input_configs(configs)) {
+      perror("Arquivo de configurações inválido.\n");
+      free_input_configs(configs);
+      configs = NULL;
+    }
+  }
+
+  // Caso input configs válido, brodcast para demais processos de rank != 0
+  if (!broadcast_input_configs(&configs, rank)) {
+    MPI_Finalize();
     return EXIT_FAILURE;
   }
 
-  InputConfigs* configs = load_input_configs(argv[1]);
-  if (!configs) {
-    perror("Arquivo de configurações inválido.\n");
-    free_input_configs(configs);
-    return EXIT_FAILURE;
-  }
-
-  if (!is_valid_input_configs(configs)) {
-    perror("Arquivo de configurações inválido.\n");
-    free_input_configs(configs);
-    return EXIT_FAILURE;
-  }
-
+  // Todos processos printam
   // print_loaded_input_configs(configs);
 
-  Celula *matrix_estado_atual = build_linear_state_matrix(configs);
-  Metrics *vetor_tempo_atual = build_metrics_vector(configs);
-  Metrics *vetor_proximo_tempo = build_metrics_vector(configs);
-  int *vetor_ativacao = build_mapa_contencao(configs, matrix_estado_atual);
-
-  if (!matrix_estado_atual || !vetor_tempo_atual || !vetor_proximo_tempo || !vetor_ativacao) {
-    perror("Falha ao alocar memória para matriz");
-
-    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
-    return EXIT_FAILURE;
-  }
-
-  if (!populate_matrix(configs, matrix_estado_atual)) {
-    perror("Falha ao popular matriz.\n");
-
-    cleanup_simulation_setup(configs, matrix_estado_atual, NULL, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
-    return EXIT_FAILURE;
-  }
-
-  Celula *matrix_proximo_estado = copy_matrix(configs, matrix_estado_atual);
-  if (!matrix_proximo_estado) {
-    perror("Falha ao copiar matriz.\n");
-    cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
-    return EXIT_FAILURE;
-  }
-
-  apply_focos_iniciais_incendio(configs, matrix_estado_atual);
-  apply_focos_iniciais_incendio(configs, matrix_proximo_estado);
-
-  int passo_final = run_simulation(configs, matrix_estado_atual, matrix_proximo_estado, vetor_ativacao, vetor_tempo_atual, vetor_proximo_tempo);
+  mpi_run_simulation(configs, rank, size);
   
-  unsigned long long checksum = calculate_checksum(configs, matrix_estado_atual, vetor_tempo_atual);
-  print_final_report(passo_final, checksum, vetor_tempo_atual);
-
-
-  cleanup_simulation_setup(configs, matrix_estado_atual, matrix_proximo_estado, vetor_tempo_atual, vetor_proximo_tempo, vetor_ativacao);
+  // Todos finalizam
+  MPI_Finalize();
   return EXIT_SUCCESS;
 }
