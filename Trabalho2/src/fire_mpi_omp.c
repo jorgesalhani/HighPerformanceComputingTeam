@@ -1056,10 +1056,10 @@ bool broadcast_vetor_zonas_contencao(InputConfigs* configs, int rank) {
       for (int i = 0; i < configs->Z; i++) {
         configs->ZONAS_CONTENCAO[i] = (ZonaContencao*) malloc(sizeof(ZonaContencao));
         configs->ZONAS_CONTENCAO[i]->PASSO_ATIVACAO = zonas_int_linear[i * 5 + 0];
-        configs->ZONAS_CONTENCAO[i]->LI             = zonas_int_linear[i * 5 + 1];
-        configs->ZONAS_CONTENCAO[i]->CI             = zonas_int_linear[i * 5 + 2];
-        configs->ZONAS_CONTENCAO[i]->LF             = zonas_int_linear[i * 5 + 3];
-        configs->ZONAS_CONTENCAO[i]->CF             = zonas_int_linear[i * 5 + 4];
+        configs->ZONAS_CONTENCAO[i]->LI = zonas_int_linear[i * 5 + 1];
+        configs->ZONAS_CONTENCAO[i]->CI = zonas_int_linear[i * 5 + 2];
+        configs->ZONAS_CONTENCAO[i]->LF = zonas_int_linear[i * 5 + 3];
+        configs->ZONAS_CONTENCAO[i]->CF = zonas_int_linear[i * 5 + 4];
       }
     }
 
