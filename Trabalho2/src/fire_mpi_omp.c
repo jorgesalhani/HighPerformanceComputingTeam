@@ -949,6 +949,14 @@ int calculate_max_ignicoes(int passo, Metrics* vetor_tempo, int* passo_max_ign) 
   return max_ignicoes;
 }
 
+double calculate_total_simulation_time(int passo_final, const Metrics *vetor_tempo_atual) {
+  double total_time = 0.0;
+  for (int i = 0; i <= passo_final; i++) {
+    total_time += vetor_tempo_atual[i].TEMPO;
+  }
+  return total_time;
+}
+
 static inline void exchange_halo_rows(
   Celula *matrix_atual,
   int local_rows,
@@ -1355,7 +1363,7 @@ void print_final_report(int passo, unsigned long long checksum, Metrics *vetor_t
   printf("percentual_queimado: %.2f\n", calculate_percentual_queimado(passo, vetor_tempo));
   printf("percentual_protegido: %.2f\n", calculate_percentual_protegido(passo, vetor_tempo));
   printf("checksum: %llu\n", checksum);
-  printf("tempo: %.6f\n", vetor_tempo[passo].TEMPO - vetor_tempo[0].TEMPO);
+  printf("tempo: %.6f\n", calculate_total_simulation_time(passo, vetor_tempo));
 }
 
 /**
