@@ -1177,7 +1177,7 @@ int run_simulation(
       #pragma omp single
       {
         if (rank == 0) {
-          vetor_tempo_atual[p].TEMPO = omp_get_wtime();
+          vetor_tempo_atual[p].TEMPO = MPI_Wtime();
           vetor_tempo_atual[p].PASSO = p;
         }
 
@@ -1302,7 +1302,7 @@ int run_simulation(
           vetor_tempo_atual[p].QUEIMADAS = global_metrics[5];
           vetor_tempo_atual[p].CONTENCAO = global_metrics[6];
 
-          vetor_tempo_atual[p].TEMPO = omp_get_wtime() - vetor_tempo_atual[p].TEMPO;
+          vetor_tempo_atual[p].TEMPO = MPI_Wtime() - vetor_tempo_atual[p].TEMPO;
         }
 
         manter_simulacao = (global_metrics[4] != 0) && (p < P_TOTAL);
